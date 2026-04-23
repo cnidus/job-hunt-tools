@@ -121,7 +121,7 @@ export default function Home() {
         const templates = DAILY_TEMPLATES[dow]
         const seeded: DailyTask[] = []
         for (const t of templates) {
-          const task = await upsertTask({ ...t, task_date: todayStr })
+          const task = await upsertTask({ ...t, task_date: todayStr, completed_at: null, notes: null })
           if (task) seeded.push(task)
         }
         setDailyTasks(seeded)
