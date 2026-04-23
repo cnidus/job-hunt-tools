@@ -1,18 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
-export default function LoginPage() {
+// useSearchParams() must live inside a <Suspense> boundary in Next.js 15.
+// We split it into a child component so the outer page can wrap it.
+function LoginContent() {
   const [loading, setLoading] = useState(false)
   const searchParams = useSearchParams()
   const error = searchParams.get('error')
-
-  useEffect(() => {
-    // If we somehow land here authenticated, let middleware redirect us.
-    // Nothing to do client-side.
-  }, [])
 
   async function signInWithGoogle() {
     if (!supabase) return
@@ -86,5 +83,13 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginContent />
+    </Suspense>
   )
 }
