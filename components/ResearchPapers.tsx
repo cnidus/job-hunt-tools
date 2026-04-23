@@ -194,7 +194,7 @@ export default function ResearchPapers({ papers, patents }: Props) {
       <div className="text-center py-16 text-gray-400">
         <div className="text-4xl mb-3">🔬</div>
         <p className="text-sm font-medium text-gray-600 mb-1">No research found yet</p>
-        <p className="text-xs text-gray-400">Run the research agent to search for papers and patents by the company's key people.</p>
+        <p className="text-xs text-gray-400">Run the research agent to search for papers and patents by the company&apos;s key people.</p>
       </div>
     )
   }
