@@ -102,7 +102,7 @@ export default function ResearchNotes({ notes, onSave, onUpdate, onDelete }: Pro
         <div className="text-center py-12 text-gray-400">
           <div className="text-3xl mb-2">📝</div>
           <p className="text-sm font-medium">No notes yet</p>
-          <p className="text-xs mt-1">Capture key learnings as you research — they'll persist across sessions.</p>
+          <p className="text-xs mt-1">Capture key learnings as you research — they&apos;ll persist across sessions.</p>
         </div>
       ) : (
         <div className="space-y-3">

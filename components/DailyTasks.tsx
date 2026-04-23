@@ -32,7 +32,7 @@ export default function DailyTasks({ tasks, onToggle }: Props) {
     return (
       <div className="text-center py-12 text-gray-400">
         <p className="text-sm">No tasks for today yet.</p>
-        <p className="text-xs mt-1">Click "Fetch Intel" to generate today's tasks.</p>
+        <p className="text-xs mt-1">Click &quot;Fetch Intel&quot; to generate today&apos;s tasks.</p>
       </div>
     )
   }
@@ -42,7 +42,7 @@ export default function DailyTasks({ tasks, onToggle }: Props) {
       {/* Progress */}
       <div className="bg-white rounded-xl border border-gray-100 p-4 mb-4 shadow-sm">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-semibold text-gray-700">Today's Progress</span>
+          <span className="text-sm font-semibold text-gray-700">Today&apos;s Progress</span>
           <span className="text-sm font-bold text-[#3d74cc]">{pct}%</span>
         </div>
         <div className="bg-gray-100 rounded-full h-2 overflow-hidden">
