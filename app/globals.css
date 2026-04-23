@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --cw-blue:    #3d74cc;
+  --cw-dark:    #1a3a6b;
+  --cw-light:   #f0f5ff;
+  --cw-border:  #e0e9fa;
+  --bg:         #f4f6fb;
+}
+
+html, body { background: var(--bg); }
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--cw-border); border-radius: 3px; }
+
+/* Badge animations */
+@keyframes pulse-new {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.7; }
+}
+.badge-new-pulse { animation: pulse-new 2s ease-in-out infinite; }
