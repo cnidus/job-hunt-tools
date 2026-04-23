@@ -6,8 +6,8 @@
  *   1. Clockwork.io blog / sitemap
  *   2. Google News via SerpAPI (if SERP_API_KEY is set)
  *
- * Returns an array of IntelItem-shaped objects. The client
- * is responsible for upserting them into Supabase.
+ * Uses the Supabase service-role key to bypass RLS when inserting
+ * intel_items (shared feed — not user-specific).
  *
  * Extend this file to add more sources (LinkedIn scrape, RSS feeds, etc.)
  */
@@ -15,8 +15,11 @@
 import { NextResponse } from 'next/server'
 import { createClient }  from '@supabase/supabase-js'
 
+// Service-role client bypasses RLS for shared intel_items inserts.
+// Falls back to publishable key for backward compat during initial setup.
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL         ?? '',
+  process.env.SUPABASE_SERVICE_ROLE_KEY        ??
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
 )
 
@@ -89,6 +92,7 @@ async function fetchGoogleNews(): Promise<RawItem[]> {
     'Clockwork Systems AI',
     'Clockwork.io FleetIQ',
     '"Suresh Vasudevan" Clockwork',
+    'GPU cluster networking AI fabric',
   ]
 
   const results: RawItem[] = []

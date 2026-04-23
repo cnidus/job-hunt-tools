@@ -1,15 +1,16 @@
-import { createClient } from '@supabase/supabase-js'
+import { createBrowserClient } from '@supabase/ssr'
 
-const url  = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
-const key  = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
+const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
+const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
 
 /**
- * Supabase browser client.
- * Uses the "publishable key" (Supabase's current naming for the safe,
- * client-side key — previously called "anon key").
- * If env vars are missing (local dev without .env.local),
- * the app returns null and storage calls are no-ops.
+ * Supabase browser client (cookie-based sessions via @supabase/ssr).
+ * Uses the "publishable key" (formerly "anon key").
+ * Returns null if env vars are missing so the app degrades gracefully.
+ *
+ * Only import this in 'use client' components — for server/middleware
+ * use createServerClient from @supabase/ssr directly.
  */
-export const supabase = url && key ? createClient(url, key) : null
+export const supabase = url && key ? createBrowserClient(url, key) : null
 
 export const isSupabaseConfigured = !!supabase

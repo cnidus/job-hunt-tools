@@ -38,13 +38,14 @@ export interface IntelItem {
   fetched_at: string
   tags: string[]
   metadata: Record<string, unknown>
-  // Joined from user_actions:
+  // Joined from user_actions (filtered to current user via RLS):
   actions?: UserAction[]
 }
 
 export interface UserAction {
   id: string
   item_id: string
+  user_id: string
   action: ActionType
   actioned_at: string
   notes: string | null
@@ -53,6 +54,7 @@ export interface UserAction {
 export interface DailyTask {
   id: string
   task_date: string      // YYYY-MM-DD
+  user_id?: string
   title: string
   detail: string | null
   category: TaskCategory
@@ -66,14 +68,22 @@ export interface MasteryItem {
   category: string
   title: string
   priority: MasteryPriority
-  completed_at: string | null
+  completed_at: string | null  // derived from mastery_completions join
   sort_order: number
+}
+
+export interface MasteryCompletion {
+  id: string
+  user_id: string
+  mastery_item_id: string
+  completed_at: string
 }
 
 export interface ResearchNote {
   id: string
   created_at: string
   updated_at: string
+  user_id?: string
   title: string
   content: string
   tags: string[]

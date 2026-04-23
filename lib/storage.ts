@@ -4,9 +4,13 @@
  * Abstraction layer over Supabase.
  * All data access goes through here — swap the backend without touching components.
  *
- * When Supabase is configured:   reads/writes go to Postgres
- * When it is NOT configured:     falls back to in-memory state (no persistence)
- *   → run `npm run dev`, connect Supabase via .env.local, and data will persist.
+ * Auth model:
+ *   - intel_items: shared across all users (RLS: SELECT for authenticated)
+ *   - user_actions, daily_tasks, research_notes: per-user via RLS + explicit user_id
+ *   - mastery_items: shared read-only templates
+ *   - mastery_completions: per-user completion state
+ *
+ * RLS on the DB enforces isolation — user_id in writes is belt-and-suspenders.
  */
 
 import { supabase } from './supabase'
@@ -18,6 +22,14 @@ import type {
   MasteryItem,
   ResearchNote,
 } from './types'
+
+// ─── Auth helper ──────────────────────────────────────────────────────────
+
+async function getCurrentUserId(): Promise<string | null> {
+  if (!supabase) return null
+  const { data: { user } } = await supabase.auth.getUser()
+  return user?.id ?? null
+}
 
 // ─── Intel Items ──────────────────────────────────────────────────────────
 
@@ -31,16 +43,15 @@ export async function fetchIntelItems(): Promise<IntelItem[]> {
 
   if (error) { console.error('fetchIntelItems:', error); return [] }
 
-  // Fetch all actions for these items in one query
   const ids = (items ?? []).map((i) => i.id)
   if (ids.length === 0) return []
 
+  // RLS automatically scopes user_actions to the current user
   const { data: actions } = await supabase
     .from('user_actions')
     .select('*')
     .in('item_id', ids)
 
-  // Attach actions to items
   const actionMap: Record<string, UserAction[]> = {}
   for (const a of actions ?? []) {
     if (!actionMap[a.item_id]) actionMap[a.item_id] = []
@@ -49,9 +60,9 @@ export async function fetchIntelItems(): Promise<IntelItem[]> {
 
   return (items ?? []).map((item) => ({
     ...item,
-    tags:    item.tags ?? [],
+    tags:     item.tags ?? [],
     metadata: item.metadata ?? {},
-    actions: actionMap[item.id] ?? [],
+    actions:  actionMap[item.id] ?? [],
   })) as IntelItem[]
 }
 
@@ -78,10 +89,15 @@ export async function recordAction(
   notes?: string
 ): Promise<boolean> {
   if (!supabase) return false
+  const userId = await getCurrentUserId()
+  if (!userId) return false
 
   const { error } = await supabase
     .from('user_actions')
-    .upsert({ item_id: itemId, action, notes: notes ?? null }, { onConflict: 'item_id,action' })
+    .upsert(
+      { item_id: itemId, action, user_id: userId, notes: notes ?? null },
+      { onConflict: 'item_id,action,user_id' }
+    )
 
   if (error) { console.error('recordAction:', error); return false }
   return true
@@ -89,12 +105,15 @@ export async function recordAction(
 
 export async function removeAction(itemId: string, action: ActionType): Promise<boolean> {
   if (!supabase) return false
+  const userId = await getCurrentUserId()
+  if (!userId) return false
 
   const { error } = await supabase
     .from('user_actions')
     .delete()
     .eq('item_id', itemId)
     .eq('action', action)
+    .eq('user_id', userId)
 
   if (error) { console.error('removeAction:', error); return false }
   return true
@@ -105,6 +124,7 @@ export async function removeAction(itemId: string, action: ActionType): Promise<
 export async function fetchTasksForDate(date: string): Promise<DailyTask[]> {
   if (!supabase) return []
 
+  // RLS scopes this to the current user automatically
   const { data, error } = await supabase
     .from('daily_tasks')
     .select('*')
@@ -117,10 +137,12 @@ export async function fetchTasksForDate(date: string): Promise<DailyTask[]> {
 
 export async function upsertTask(task: Omit<DailyTask, 'id'>): Promise<DailyTask | null> {
   if (!supabase) return null
+  const userId = await getCurrentUserId()
+  if (!userId) return null
 
   const { data, error } = await supabase
     .from('daily_tasks')
-    .upsert(task, { onConflict: 'id' })
+    .insert({ ...task, user_id: userId })
     .select()
     .single()
 
@@ -145,24 +167,48 @@ export async function completeTask(id: string, completed: boolean): Promise<bool
 export async function fetchMasteryItems(): Promise<MasteryItem[]> {
   if (!supabase) return []
 
-  const { data, error } = await supabase
-    .from('mastery_items')
-    .select('*')
-    .order('sort_order')
+  // Fetch shared templates + current user's completions in parallel
+  const [{ data: items, error }, { data: completions }] = await Promise.all([
+    supabase.from('mastery_items').select('*').order('sort_order'),
+    supabase.from('mastery_completions').select('mastery_item_id, completed_at'),
+    // RLS scopes mastery_completions to current user
+  ])
 
   if (error) { console.error('fetchMasteryItems:', error); return [] }
-  return (data ?? []) as MasteryItem[]
+
+  const completionMap: Record<string, string> = {}
+  for (const c of completions ?? []) {
+    completionMap[c.mastery_item_id] = c.completed_at
+  }
+
+  return (items ?? []).map((item) => ({
+    ...item,
+    completed_at: completionMap[item.id] ?? null,
+  })) as MasteryItem[]
 }
 
 export async function completeMasteryItem(id: string, completed: boolean): Promise<boolean> {
   if (!supabase) return false
+  const userId = await getCurrentUserId()
+  if (!userId) return false
 
-  const { error } = await supabase
-    .from('mastery_items')
-    .update({ completed_at: completed ? new Date().toISOString() : null })
-    .eq('id', id)
+  if (completed) {
+    const { error } = await supabase
+      .from('mastery_completions')
+      .upsert(
+        { mastery_item_id: id, user_id: userId, completed_at: new Date().toISOString() },
+        { onConflict: 'user_id,mastery_item_id' }
+      )
+    if (error) { console.error('completeMasteryItem(insert):', error); return false }
+  } else {
+    const { error } = await supabase
+      .from('mastery_completions')
+      .delete()
+      .eq('mastery_item_id', id)
+      .eq('user_id', userId)
+    if (error) { console.error('completeMasteryItem(delete):', error); return false }
+  }
 
-  if (error) { console.error('completeMasteryItem:', error); return false }
   return true
 }
 
@@ -171,6 +217,7 @@ export async function completeMasteryItem(id: string, completed: boolean): Promi
 export async function fetchNotes(): Promise<ResearchNote[]> {
   if (!supabase) return []
 
+  // RLS scopes to current user
   const { data, error } = await supabase
     .from('research_notes')
     .select('*')
@@ -184,10 +231,12 @@ export async function saveNote(
   note: Omit<ResearchNote, 'id' | 'created_at' | 'updated_at'>
 ): Promise<ResearchNote | null> {
   if (!supabase) return null
+  const userId = await getCurrentUserId()
+  if (!userId) return null
 
   const { data, error } = await supabase
     .from('research_notes')
-    .insert(note)
+    .insert({ ...note, user_id: userId })
     .select()
     .single()
 
