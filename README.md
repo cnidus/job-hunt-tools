@@ -37,7 +37,7 @@ cp .env.local.example .env.local
 
 Edit `.env.local` with your Supabase credentials:
 - `NEXT_PUBLIC_SUPABASE_URL` — from Settings → API → Project URL
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY` — from Settings → API → anon/public key
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — from Settings → API → "Publishable key" (formerly "anon key")
 
 Optionally add a SerpAPI key for Google News auto-fetch (100 free searches/month):
 - Sign up at [serpapi.com](https://serpapi.com)
@@ -57,7 +57,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 1. Push your repo to GitHub
 2. Go to [vercel.com](https://vercel.com) → Import Project → select your repo
-3. Add your environment variables in Vercel's project settings
+3. Add your environment variables: `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 4. Deploy — takes ~60 seconds
 
 Every `git push` to `main` auto-deploys.
