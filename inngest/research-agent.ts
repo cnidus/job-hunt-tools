@@ -1,451 +1,459 @@
 /**
- * inngest/research-agent.ts
+ * research-agent.ts
  *
- * 5-phase async research pipeline, orchestrated by Inngest.
- * Each step.run() gets independent retry logic; Inngest checkpoints
- * completed steps so a mid-run failure resumes from the last incomplete phase.
+ * 5-phase Inngest research pipeline for a single job.
  *
- * Phase summary:
- *   P1 – Crunchbase discovery     (company profile + founders)
- *   P2 – Entity enrichment        (LinkedIn URLs via SerpAPI)
- *   P3 – Research scrape          (Semantic Scholar papers + SerpAPI Patents)
- *   P4 – News refresh             (SerpAPI Google News — reuses fetch-intel logic)
- *   P5 – Claude synthesis         (single Anthropic call for relevance scoring)
+ * P1  Company Intelligence  — SerpAPI KG + Wikipedia + organic snippets (Crunchbase optional)
+ * P2  Entity Enrichment     — SerpAPI LinkedIn URL search per person
+ * P3  Academic + Patents    — Semantic Scholar + SerpAPI Google Patents
+ * P4  News Refresh          — SerpAPI Google News (reuses fetch-intel logic)
+ * P5  Claude Synthesis      — Single Anthropic call scores + annotates papers/patents
  *
- * Cost model: Claude is called ONCE in P5 with pre-structured data.
- * All other phases are deterministic API calls — no Claude tokens spent.
+ * All phases write to Supabase via service-role client (bypasses RLS).
+ * Checkpoints are stored in research_jobs.phases_complete[].
  */
 
 import { inngest } from './client'
 import { createClient } from '@supabase/supabase-js'
 import Anthropic from '@anthropic-ai/sdk'
 
-// ─── Admin Supabase client (bypasses RLS) ─────────────────────────────────
+// ─── Admin client (bypasses RLS) ─────────────────────────────────────────────
 
 const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_URL         ?? '',
+  process.env.SUPABASE_SERVICE_ROLE_KEY        ??
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
 )
 
-// ─── Anthropic client ─────────────────────────────────────────────────────
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+})
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-// ─── Progress helper ──────────────────────────────────────────────────────
+type EntityType = 'founder' | 'ceo' | 'cto' | 'vp' | 'investor' | 'advisor' | 'board'
 
-async function setProgress(
-  researchJobId: string,
-  pct: number,
-  message: string,
-  completedPhase?: string
-) {
-  const patch: Record<string, unknown> = {
-    progress_pct: pct,
-    progress_message: message,
-    status: pct === 100 ? 'complete' : 'running',
-  }
-  if (pct >= 5 && !patch.started_at) patch.started_at = new Date().toISOString()
-  if (pct === 100) patch.completed_at = new Date().toISOString()
-
-  await supabaseAdmin.from('research_jobs').update(patch).eq('id', researchJobId)
-
-  if (completedPhase) {
-    await supabaseAdmin.rpc('append_phase_complete', {
-      job_id: researchJobId,
-      phase_name: completedPhase,
-    })
-  }
+interface CompanyIntelligenceResult {
+  description:    string | null
+  employee_count: string | null
+  founded_year:   number | null
+  hq_location:    string | null
+  funding_total:  number | null  // USD millions
+  funding_stage:  string | null
+  ceo_name:       string | null
+  ceo_linkedin:   string | null
+  website:        string | null
+  entities: Array<{
+    name:        string
+    role:        EntityType
+    title:       string | null
+    linkedin_url: string | null
+    source:      string
+  }>
+  investors: Array<{
+    name:       string
+    stage:      string | null
+    amount_usd: number | null
+    source:     string
+  }>
 }
 
-// ─── Intel material-event scanner ────────────────────────────────────────
-// Exported so it can be used by the fetch-intel route to auto-trigger refreshes.
+interface RawPaper {
+  external_id:  string
+  title:        string
+  authors:      string[]
+  abstract:     string | null
+  year:         number | null
+  venue:        string | null
+  citation_count: number
+  url:          string | null
+  entity_name:  string
+}
 
-const MATERIAL_EVENT_RE = [
-  /raises?\s+\$[\d.]+[mb]/i,
-  /series\s+[a-f]\b/i,
-  /new\s+ceo\b/i,
-  /appoints\s+new/i,
-  /\bacquires?\b/i,
-  /\bmerges?\s+with\b/i,
-  /\bipo\b/i,
-  /\blayoffs?\b/i,
-  /funding\s+round/i,
-]
+interface RawPatent {
+  patent_id:    string | null
+  title:        string
+  inventors:    string[]
+  assignee:     string | null
+  filing_date:  string | null
+  url:          string | null
+  abstract:     string | null
+  entity_name:  string
+}
+
+// ─── Material-event detection (exported for use in fetch-intel trigger) ────────
 
 export function detectMaterialEvent(title: string, summary: string | null): boolean {
-  const text = `${title} ${summary ?? ''}`
-  return MATERIAL_EVENT_RE.some((re) => re.test(text))
+  const text = `${title} ${summary ?? ''}`.toLowerCase()
+  return /\b(series [a-z]|seed round|raise[ds]?|funding|valuation|ipo|acqui|merger|ceo|chief executive|layoff|layoffs|cut[s]? \d+%)\b/.test(text)
 }
 
-// ─── P1: Crunchbase ───────────────────────────────────────────────────────
+// ─── P1: Multi-source company intelligence ────────────────────────────────────
 
-interface CrunchbaseResult {
-  short_description: string | null
-  description: string | null
-  founded_year: number | null
-  employee_count_label: string | null
-  employee_count_min: number | null
-  employee_count_max: number | null
-  total_funding_usd: number | null
-  last_round_type: string | null
-  last_round_date: string | null
-  crunchbase_url: string | null
-  linkedin_url: string | null
-  twitter_url: string | null
-  founders: Array<{ name: string; title: string }>
-  raw: unknown
-}
+async function fetchCompanyIntelligence(
+  companyName: string
+): Promise<CompanyIntelligenceResult> {
+  const result: CompanyIntelligenceResult = {
+    description: null, employee_count: null, founded_year: null,
+    hq_location: null, funding_total: null, funding_stage: null,
+    ceo_name: null, ceo_linkedin: null, website: null,
+    entities: [], investors: [],
+  }
 
-async function fetchCrunchbase(companyName: string): Promise<CrunchbaseResult | null> {
-  const apiKey = process.env.CRUNCHBASE_API_KEY
-  if (!apiKey) return null
+  const serpKey = process.env.SERP_API_KEY
+  if (!serpKey) return result
 
+  // ── 1a. SerpAPI Google search — Knowledge Graph + Related Questions ──────
   try {
-    const searchRes = await fetch(
-      `https://api.crunchbase.com/api/v4/searches/organizations?user_key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          field_ids: [
-            'short_description', 'num_employees_enum', 'funding_stage',
-            'total_funding_usd', 'last_funding_type', 'last_funding_at',
-            'founded_on', 'location_identifiers', 'website_url',
-            'linkedin', 'twitter', 'identifier',
-          ],
-          query: [
-            { type: 'predicate', field_id: 'facet_ids', operator_id: 'includes', values: ['company'] },
-          ],
-          predicate_filters: [
-            { field_id: 'name', operator_id: 'contains', values: [companyName] },
-          ],
-          order: [{ field_id: 'rank_org', sort: 'asc' }],
-          limit: 1,
-        }),
-      }
-    )
+    const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(companyName + ' company')}&api_key=${serpKey}`
+    const res  = await fetch(url)
+    if (res.ok) {
+      const json = await res.json()
 
-    if (!searchRes.ok) {
-      console.warn('Crunchbase search failed:', searchRes.status)
-      return null
-    }
+      // Knowledge Graph panel (returned for established companies)
+      const kg = json.knowledge_graph
+      if (kg) {
+        result.description    = kg.description ?? result.description
+        result.hq_location    = kg.headquarters ?? kg.location ?? result.hq_location
+        result.website        = kg.website ?? result.website
+        result.employee_count = kg.employees?.toString() ?? result.employee_count
+        result.founded_year   = kg.founded ? parseInt(String(kg.founded)) : result.founded_year
 
-    const searchData = await searchRes.json()
-    const org = searchData.entities?.[0]
-    if (!org) return null
-
-    const props = org.properties ?? {}
-    const permalink = org.identifier?.permalink ?? ''
-
-    // Employee count range parsing
-    const empEnum = props.num_employees_enum ?? ''
-    const empRanges: Record<string, [number, number]> = {
-      'c_00001_00010': [1, 10],   'c_00011_00050': [11, 50],
-      'c_00051_00100': [51, 100], 'c_00101_00250': [101, 250],
-      'c_00251_00500': [251, 500],'c_00501_01000': [501, 1000],
-      'c_01001_05000': [1001, 5000], 'c_05001_10000': [5001, 10000],
-      'c_10001_max': [10001, 0],
-    }
-    const [empMin, empMax] = empRanges[empEnum] ?? [null, null]
-    const empLabel = empMin ? `${empMin}–${empMax || '10,000+'} employees` : null
-
-    // Fetch founders (best-effort — Basic API may not return these)
-    const founders: Array<{ name: string; title: string }> = []
-    if (permalink) {
-      try {
-        const peopleRes = await fetch(
-          `https://api.crunchbase.com/api/v4/entities/organizations/${permalink}/relationships/founders?user_key=${apiKey}&field_ids=first_name,last_name,primary_job_title`
+        // CEO from knowledge_graph.profiles or people table
+        const ceoEntry = (kg.profiles ?? []).find((p: { name?: string; title?: string }) =>
+          /ceo|chief executive/i.test(p.title ?? '')
         )
-        if (peopleRes.ok) {
-          const peopleData = await peopleRes.json()
-          for (const p of peopleData.entities ?? []) {
-            const pp = p.properties ?? {}
-            const name = `${pp.first_name ?? ''} ${pp.last_name ?? ''}`.trim()
-            if (name) founders.push({ name, title: pp.primary_job_title ?? 'Founder' })
+        if (ceoEntry?.name) {
+          result.ceo_name = ceoEntry.name
+          result.entities.push({
+            name: ceoEntry.name, role: 'ceo',
+            title: ceoEntry.title ?? 'CEO',
+            linkedin_url: null, source: 'serp_kg',
+          })
+        }
+
+        // Founders listed in KG
+        const founders: string[] = []
+        if (kg.founders) {
+          const raw = Array.isArray(kg.founders) ? kg.founders : [kg.founders]
+          for (const f of raw) {
+            const name = typeof f === 'string' ? f : f.name
+            if (name && !founders.includes(name)) founders.push(name)
           }
         }
-      } catch {
-        // founders endpoint may not be available on Basic tier — skip gracefully
+        for (const name of founders) {
+          if (!result.entities.find((e) => e.name === name)) {
+            result.entities.push({ name, role: 'founder', title: 'Co-Founder', linkedin_url: null, source: 'serp_kg' })
+          }
+        }
+      }
+
+      // Related Questions — extract funding/founder/CEO facts from snippets
+      for (const qa of json.related_questions ?? []) {
+        const q: string = (qa.question ?? '').toLowerCase()
+        const a: string = qa.snippet ?? qa.answer ?? ''
+        if (!a) continue
+
+        // Funding amount
+        if (/funding|raise|valuation|worth/.test(q) && !result.funding_total) {
+          const m = a.match(/\$\s*([\d.]+)\s*(billion|million|B|M)\b/i)
+          if (m) {
+            const n = parseFloat(m[1])
+            result.funding_total = /billion|B/i.test(m[2]) ? n * 1000 : n
+          }
+        }
+
+        // Founders (who founded / who started)
+        if (/who (founded|started|created|built)/.test(q) && result.entities.filter(e => e.role === 'founder').length === 0) {
+          // Try to extract names — look for "Name and Name founded..."
+          const nameMatches = a.match(/([A-Z][a-z]+ [A-Z][a-z]+)/g) ?? []
+          for (const name of nameMatches.slice(0, 3)) {
+            if (!result.entities.find((e) => e.name === name)) {
+              result.entities.push({ name, role: 'founder', title: 'Co-Founder', linkedin_url: null, source: 'serp_rq' })
+            }
+          }
+        }
+
+        // CEO (who is the ceo / who runs)
+        if (/who (is|runs|leads|heads)/.test(q) && /ceo|chief executive|run/i.test(q) && !result.ceo_name) {
+          const nameMatch = a.match(/^([A-Z][a-z]+ [A-Z][a-z]+)/)
+          if (nameMatch) {
+            result.ceo_name = nameMatch[1]
+            if (!result.entities.find((e) => e.name === nameMatch[1])) {
+              result.entities.push({ name: nameMatch[1], role: 'ceo', title: 'CEO', linkedin_url: null, source: 'serp_rq' })
+            }
+          }
+        }
+
+        // Founded year
+        if (/when.*found|year.*found/.test(q) && !result.founded_year) {
+          const yearMatch = a.match(/\b(19|20)\d{2}\b/)
+          if (yearMatch) result.founded_year = parseInt(yearMatch[0])
+        }
+
+        // Funding stage
+        if (/series|stage|round/.test(q) && !result.funding_stage) {
+          const stageMatch = a.match(/\bSeries [A-Z]\b|\bSeed\b|\bIPO\b|\bPublic\b/i)
+          if (stageMatch) result.funding_stage = stageMatch[0]
+        }
+      }
+
+      // Organic results — scan first 3 snippets for employee count if not found yet
+      if (!result.employee_count) {
+        for (const organic of (json.organic_results ?? []).slice(0, 3)) {
+          const snippet: string = organic.snippet ?? ''
+          const m = snippet.match(/(\d[\d,]+)\s*(employees|staff|people)/i)
+          if (m) {
+            result.employee_count = m[1].replace(/,/g, '')
+            break
+          }
+        }
       }
     }
-
-    return {
-      short_description: props.short_description ?? null,
-      description:       null,
-      founded_year:      props.founded_on?.value
-        ? parseInt(props.founded_on.value.split('-')[0])
-        : null,
-      employee_count_label: empLabel,
-      employee_count_min:   empMin ?? null,
-      employee_count_max:   empMax ?? null,
-      total_funding_usd:    props.total_funding_usd ?? null,
-      last_round_type:      props.last_funding_type ?? null,
-      last_round_date:      props.last_funding_at?.value ?? null,
-      crunchbase_url: permalink
-        ? `https://www.crunchbase.com/organization/${permalink}`
-        : null,
-      linkedin_url: props.linkedin?.value ?? null,
-      twitter_url:  props.twitter?.value ?? null,
-      founders,
-      raw: org,
-    }
   } catch (e) {
-    console.error('fetchCrunchbase:', e)
-    return null
-  }
-}
-
-// ─── P2: Entity enrichment ────────────────────────────────────────────────
-
-interface Entity {
-  name: string
-  title: string
-  entity_type: 'founder' | 'executive'
-  linkedin_url: string | null
-  source: string
-  source_url: string | null
-}
-
-async function searchForFounders(companyName: string): Promise<Entity[]> {
-  const apiKey = process.env.SERP_API_KEY
-  if (!apiKey) return []
-
-  try {
-    const q = `"${companyName}" founder OR CEO OR CTO site:linkedin.com/in`
-    const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&api_key=${apiKey}&num=10`
-    const res = await fetch(url)
-    if (!res.ok) return []
-
-    const data = await res.json()
-    const entities: Entity[] = []
-
-    for (const result of data.organic_results ?? []) {
-      if (!result.link?.includes('linkedin.com/in/')) continue
-      const name = result.title?.split(' - ')[0]?.split(' | ')[0]?.trim()
-      if (!name || name.length < 3) continue
-      entities.push({
-        name,
-        title: result.title?.split(' - ')[1]?.trim() ?? 'Executive',
-        entity_type: 'founder',
-        linkedin_url: result.link,
-        source: 'serpapi',
-        source_url: result.link,
-      })
-    }
-
-    return entities.slice(0, 5)
-  } catch (e) {
-    console.error('searchForFounders:', e)
-    return []
-  }
-}
-
-async function enrichWithLinkedIn(
-  founders: Array<{ name: string; title: string }>,
-  companyName: string
-): Promise<Entity[]> {
-  const apiKey = process.env.SERP_API_KEY
-  if (!apiKey) {
-    return founders.map((f) => ({
-      ...f, entity_type: 'founder' as const,
-      linkedin_url: null, source: 'crunchbase', source_url: null,
-    }))
+    console.error('fetchCompanyIntelligence:serp', e)
   }
 
-  const enriched: Entity[] = []
-  for (const founder of founders.slice(0, 5)) {
+  // ── 1b. Wikipedia REST API — description supplement ──────────────────────
+  if (!result.description) {
     try {
-      const q = `${founder.name} ${companyName} site:linkedin.com/in`
-      const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&api_key=${apiKey}&num=3`
-      const res = await fetch(url)
-      const linkedinUrl = res.ok
-        ? ((await res.json()).organic_results ?? [])
-            .find((r: { link: string }) => r.link?.includes('linkedin.com/in/'))?.link ?? null
-        : null
+      const slug = encodeURIComponent(companyName.replace(/\s+/g, '_'))
+      const res  = await fetch(
+        `https://en.wikipedia.org/api/rest_v1/page/summary/${slug}`,
+        { headers: { 'User-Agent': 'JobTracker/1.0 (research tool)' } }
+      )
+      if (res.ok) {
+        const wiki = await res.json()
+        if (wiki.extract && wiki.type !== 'disambiguation') {
+          result.description = wiki.extract.split('\n')[0]
+        }
+      }
+    } catch (e) {
+      console.error('fetchCompanyIntelligence:wiki', e)
+    }
+  }
 
-      enriched.push({
-        name: founder.name, title: founder.title,
-        entity_type: 'founder', linkedin_url: linkedinUrl,
-        source: 'crunchbase', source_url: linkedinUrl,
-      })
-    } catch {
-      enriched.push({
-        name: founder.name, title: founder.title,
-        entity_type: 'founder', linkedin_url: null, source: 'crunchbase', source_url: null,
-      })
+  // ── 1c. Optional Crunchbase (if API key configured) ───────────────────────
+  if (process.env.CRUNCHBASE_API_KEY) {
+    try {
+      const cbKey = process.env.CRUNCHBASE_API_KEY
+      const searchRes = await fetch(
+        `https://api.crunchbase.com/api/v4/searches/organizations`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-cb-user-key': cbKey },
+          body: JSON.stringify({
+            field_ids: ['short_description','num_employees_enum','founded_on','location_identifiers',
+                        'funding_total','last_funding_type','website_url'],
+            query: [{ type: 'predicate', field_id: 'facet_ids', operator_id: 'includes', values: ['company'] },
+                    { type: 'predicate', field_id: 'name', operator_id: 'eq', values: [companyName] }],
+            limit: 1,
+          }),
+        }
+      )
+      if (searchRes.ok) {
+        const cbData = await searchRes.json()
+        const org = cbData.entities?.[0]?.properties
+        if (org) {
+          if (!result.description)    result.description    = org.short_description ?? null
+          if (!result.employee_count) result.employee_count = org.num_employees_enum ?? null
+          if (!result.hq_location && org.location_identifiers?.length)
+            result.hq_location = org.location_identifiers[0].value
+          if (!result.founded_year && org.founded_on?.value)
+            result.founded_year = parseInt(org.founded_on.value.slice(0, 4))
+          if (!result.funding_total && org.funding_total?.value_usd)
+            result.funding_total = Math.round(org.funding_total.value_usd / 1_000_000)
+          if (!result.funding_stage) result.funding_stage = org.last_funding_type ?? null
+          if (!result.website)       result.website        = org.website_url ?? null
+        }
+      }
+    } catch (e) {
+      console.error('fetchCompanyIntelligence:crunchbase', e)
+    }
+  }
+
+  return result
+}
+
+// ─── P2: Enrich entities with LinkedIn URLs via SerpAPI ───────────────────────
+
+async function enrichEntitiesWithLinkedIn(
+  entities: CompanyIntelligenceResult['entities'],
+  companyName: string
+): Promise<CompanyIntelligenceResult['entities']> {
+  const serpKey = process.env.SERP_API_KEY
+  if (!serpKey || entities.length === 0) return entities
+
+  const enriched = [...entities]
+  for (const entity of enriched) {
+    if (entity.linkedin_url) continue
+    try {
+      const q = `site:linkedin.com/in "${entity.name}" "${companyName}"`
+      const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&num=3&api_key=${serpKey}`
+      const res = await fetch(url)
+      if (!res.ok) continue
+      const json = await res.json()
+      const link = (json.organic_results ?? []).find(
+        (r: { link?: string }) => r.link?.includes('linkedin.com/in/')
+      )
+      if (link?.link) entity.linkedin_url = link.link
+      await new Promise((r) => setTimeout(r, 300))
+    } catch (e) {
+      console.error(`enrichEntitiesWithLinkedIn(${entity.name}):`, e)
     }
   }
   return enriched
 }
 
-// ─── P3: Semantic Scholar papers ─────────────────────────────────────────
-
-interface Paper {
-  title: string
-  authors: Array<{ name: string }>
-  year: number | null
-  abstract: string | null
-  citation_count: number
-  url: string | null
-  doi: string | null
-  source: string
-  dedup_key: string
-  entity_name: string
-}
+// ─── P3a: Semantic Scholar papers ────────────────────────────────────────────
 
 async function fetchPapersForEntities(
-  entities: Array<{ id: string; name: string }>
-): Promise<Paper[]> {
-  const papers: Paper[] = []
-  const seenDedup = new Set<string>()
+  entities: { name: string; role: EntityType }[]
+): Promise<RawPaper[]> {
+  const results: RawPaper[] = []
+  const seenIds = new Set<string>()
 
-  for (const entity of entities.slice(0, 5)) {
+  const targets = entities.filter((e) =>
+    ['founder', 'ceo', 'cto'].includes(e.role)
+  )
+
+  for (const entity of targets) {
     try {
-      const searchRes = await fetch(
-        `https://api.semanticscholar.org/graph/v1/author/search?query=${encodeURIComponent(entity.name)}&fields=name,paperCount&limit=3`,
-        { headers: { 'User-Agent': 'JobTracker/1.0 (research tool)' } }
+      // Search for author
+      const authRes = await fetch(
+        `https://api.semanticscholar.org/graph/v1/author/search?query=${encodeURIComponent(entity.name)}&fields=authorId,name&limit=1`
       )
-      if (!searchRes.ok) continue
-
-      const { data } = await searchRes.json()
-      const author = data?.[0]
+      if (!authRes.ok) continue
+      const authData = await authRes.json()
+      const author = authData.data?.[0]
       if (!author?.authorId) continue
 
-      const papersRes = await fetch(
-        `https://api.semanticscholar.org/graph/v1/author/${author.authorId}/papers?fields=title,year,abstract,citationCount,externalIds,url&limit=10`,
-        { headers: { 'User-Agent': 'JobTracker/1.0 (research tool)' } }
+      // Fetch their papers
+      const papRes = await fetch(
+        `https://api.semanticscholar.org/graph/v1/author/${author.authorId}/papers?fields=paperId,title,abstract,year,venue,citationCount,externalIds,authors&limit=20`
       )
-      if (!papersRes.ok) continue
+      if (!papRes.ok) continue
+      const papData = await papRes.json()
 
-      const { data: paperList } = await papersRes.json()
-      for (const p of paperList ?? []) {
-        const doi = p.externalIds?.DOI ?? null
-        const dedup = doi
-          ? `doi:${doi}`
-          : `title:${(p.title ?? '').toLowerCase().replace(/\s+/g, ' ').trim()}`
-        if (seenDedup.has(dedup)) continue
-        seenDedup.add(dedup)
+      for (const paper of papData.data ?? []) {
+        const id = `ss:${paper.paperId}`
+        if (seenIds.has(id)) continue
+        seenIds.add(id)
 
-        papers.push({
-          title:          p.title ?? 'Untitled',
-          authors:        (p.authors ?? []).map((a: { name: string }) => ({ name: a.name })),
-          year:           p.year ?? null,
-          abstract:       p.abstract ?? null,
-          citation_count: p.citationCount ?? 0,
-          url:            p.url ?? (doi ? `https://doi.org/${doi}` : null),
-          doi,
-          source:         'semantic_scholar',
-          dedup_key:      dedup,
-          entity_name:    entity.name,
+        results.push({
+          external_id:   id,
+          title:         paper.title ?? 'Untitled',
+          authors:       (paper.authors ?? []).map((a: { name: string }) => a.name),
+          abstract:      paper.abstract ?? null,
+          year:          paper.year ?? null,
+          venue:         paper.venue ?? null,
+          citation_count: paper.citationCount ?? 0,
+          url:           paper.externalIds?.DOI
+            ? `https://doi.org/${paper.externalIds.DOI}`
+            : null,
+          entity_name: entity.name,
         })
       }
-
-      // Respect Semantic Scholar rate limits (100 req/5min without API key)
       await new Promise((r) => setTimeout(r, 400))
     } catch (e) {
-      console.error(`fetchPapers(${entity.name}):`, e)
+      console.error(`fetchPapersForEntities(${entity.name}):`, e)
     }
   }
-
-  return papers
+  return results
 }
 
-// ─── P3: SerpAPI Patents ──────────────────────────────────────────────────
-
-interface Patent {
-  title: string
-  inventors: Array<{ name: string }>
-  patent_number: string | null
-  filing_date: string | null
-  grant_date: string | null
-  abstract: string | null
-  url: string | null
-  source: string
-  dedup_key: string
-  entity_name: string
-}
+// ─── P3b: SerpAPI Google Patents ──────────────────────────────────────────────
 
 async function fetchPatentsForEntities(
-  entities: Array<{ name: string }>,
+  entities: { name: string; role: EntityType }[],
   companyName: string
-): Promise<Patent[]> {
-  const apiKey = process.env.SERP_API_KEY
-  if (!apiKey) return []
+): Promise<RawPatent[]> {
+  const serpKey = process.env.SERP_API_KEY
+  if (!serpKey) return []
 
-  const patents: Patent[] = []
-  const seenDedup = new Set<string>()
+  const results: RawPatent[] = []
+  const seenIds = new Set<string>()
 
-  for (const entity of entities.slice(0, 3)) {
+  const targets = entities
+    .filter((e) => ['founder', 'ceo', 'cto'].includes(e.role))
+    .slice(0, 5)
+
+  for (const entity of targets) {
     try {
-      const q = `inventor:"${entity.name}" assignee:"${companyName}"`
-      const url = `https://serpapi.com/search.json?engine=google_patents&q=${encodeURIComponent(q)}&api_key=${apiKey}&num=5`
+      const q = `inventor:"${entity.name}" OR assignee:"${companyName}"`
+      const url = `https://serpapi.com/search.json?engine=google_patents&q=${encodeURIComponent(q)}&api_key=${serpKey}`
       const res = await fetch(url)
       if (!res.ok) continue
+      const json = await res.json()
 
-      const data = await res.json()
-      for (const patent of data.organic_results ?? []) {
-        const dedup = patent.patent_id
-          ?? `title:${(patent.title ?? '').toLowerCase().trim()}`
-        if (seenDedup.has(dedup)) continue
-        seenDedup.add(dedup)
+      for (const patent of (json.organic_results ?? []).slice(0, 10)) {
+        const patentId = patent.patent_id ?? patent.publication_number ?? null
+        const dedup = patentId ?? `title:${(patent.title ?? '').toLowerCase().slice(0, 60)}`
+        if (seenIds.has(dedup)) continue
+        seenIds.add(dedup)
 
-        patents.push({
-          title:          patent.title ?? 'Untitled',
-          inventors:      [{ name: entity.name }],
-          patent_number:  patent.patent_id ?? null,
-          filing_date:    patent.filing_date ?? null,
-          grant_date:     patent.grant_date ?? null,
-          abstract:       patent.snippet ?? null,
-          url:            patent.pdf ?? patent.link ?? null,
-          source:         'google_patents',
-          dedup_key:      dedup,
-          entity_name:    entity.name,
+        results.push({
+          patent_id:   patentId,
+          title:       patent.title ?? 'Untitled',
+          inventors:   patent.inventor ? [patent.inventor] : [],
+          assignee:    patent.assignee ?? companyName,
+          filing_date: patent.filing_date ?? null,
+          url:         patent.link ?? null,
+          abstract:    patent.snippet ?? null,
+          entity_name: entity.name,
         })
       }
+      await new Promise((r) => setTimeout(r, 300))
     } catch (e) {
-      console.error(`fetchPatents(${entity.name}):`, e)
+      console.error(`fetchPatentsForEntities(${entity.name}):`, e)
     }
   }
-
-  return patents
+  return results
 }
 
-// ─── P4: News (inline — avoids HTTP self-call) ───────────────────────────
+// ─── P4: News (reuses logic from fetch-intel route) ──────────────────────────
 
 async function fetchNewsInternal(
-  companyName: string, roleTitle: string
+  companyName: string,
+  roleTitle: string
 ): Promise<Array<{
-  source: string; item_type: string; title: string;
-  url: string | null; summary: string | null;
-  published_at: string; tags: string[]
+  source: string; item_type: string; title: string; url: string | null
+  summary: string | null; published_at: string; tags: string[]
 }>> {
-  const apiKey = process.env.SERP_API_KEY
-  if (!apiKey) return []
+  const serpKey = process.env.SERP_API_KEY
+  if (!serpKey) return []
 
   const queries = [
     `"${companyName}"`,
     `"${companyName}" ${roleTitle}`,
-    `"${companyName}" funding news`,
+    `"${companyName}" funding`,
     `"${companyName}" product launch`,
   ]
 
-  const results = []
+  const results: Array<{
+    source: string; item_type: string; title: string; url: string | null
+    summary: string | null; published_at: string; tags: string[]
+  }> = []
   const seenUrls = new Set<string>()
 
   for (const q of queries) {
     try {
-      const url = `https://serpapi.com/search.json?engine=google_news&q=${encodeURIComponent(q)}&api_key=${apiKey}`
-      const res = await fetch(url)
+      const url = `https://serpapi.com/search.json?engine=google_news&q=${encodeURIComponent(q)}&api_key=${serpKey}`
+      const res  = await fetch(url)
       if (!res.ok) continue
       const json = await res.json()
+
       for (const article of json.news_results ?? []) {
         const articleUrl = article.link ?? null
         if (articleUrl && seenUrls.has(articleUrl)) continue
         if (articleUrl) seenUrls.add(articleUrl)
+
         results.push({
-          source: 'news', item_type: 'article',
-          title: article.title ?? 'Untitled', url: articleUrl,
-          summary: article.snippet ?? null,
+          source:       'news',
+          item_type:    'article',
+          title:        article.title ?? 'Untitled',
+          url:          articleUrl,
+          summary:      article.snippet ?? null,
           published_at: article.date
             ? new Date(article.date).toISOString()
             : new Date().toISOString(),
@@ -459,345 +467,289 @@ async function fetchNewsInternal(
   return results
 }
 
-// ─── P5: Claude synthesis ─────────────────────────────────────────────────
+// ─── P5: Claude synthesis — score + annotate papers & patents ────────────────
 
 async function claudeSynthesis(
   jobId: string,
   job: { company_name: string; role_title: string },
-  papers: Paper[],
-  patents: Patent[]
-) {
-  if (!papers.length && !patents.length) return
+  papers: RawPaper[],
+  patents: RawPatent[]
+): Promise<void> {
+  if (papers.length === 0 && patents.length === 0) return
 
-  // Cap at 30 items to keep context/cost bounded
+  // Cap at 30 items to control cost (~$0.08–0.15 per run)
   const items = [
-    ...papers.map((p, i) => ({
-      idx: i, type: 'paper' as const,
-      title: p.title,
-      abstract: (p.abstract ?? '').slice(0, 500),
-      year: p.year,
-      citations: p.citation_count,
-      author: p.entity_name,
-      dedup_key: p.dedup_key,
-    })),
-    ...patents.map((p, i) => ({
-      idx: papers.length + i, type: 'patent' as const,
-      title: p.title,
-      abstract: (p.abstract ?? '').slice(0, 300),
-      year: null, citations: 0,
-      author: p.entity_name,
-      dedup_key: p.dedup_key,
-    })),
+    ...papers.map((p) => ({ kind: 'paper' as const, id: p.external_id, title: p.title, abstract: p.abstract, year: p.year, authors: p.authors })),
+    ...patents.map((p) => ({ kind: 'patent' as const, id: p.patent_id ?? p.title.slice(0, 40), title: p.title, abstract: p.abstract, year: null, authors: p.inventors })),
   ].slice(0, 30)
 
-  const prompt = `You are evaluating research papers and patents for a candidate preparing to interview at ${job.company_name} for the role of "${job.role_title}".
+  const prompt = `You are evaluating research papers and patents for a job candidate interviewing for a ${job.role_title} role at ${job.company_name}.
 
-For each item assign:
-1. relevance_category — one of:
-   - "core_to_company"  — foundational to what the company does or how it was built
-   - "relevant_to_role" — directly applicable to the day-to-day job responsibilities
-   - "tangential"       — same domain but not directly useful for this interview
-   - "not_relevant"     — unrelated
-
-2. relevance_score — float 0.00–1.00
-
-3. relevance_note — 1–2 sentences. For high-relevance items include a specific insight the candidate could mention in an interview.
+For each item below, return a JSON array with one object per item containing:
+- "id": the item's id
+- "relevance_category": one of "core_to_company" | "relevant_to_role" | "tangential" | "not_relevant"
+- "relevance_score": float 0.0–1.0 (1.0 = highly relevant to both company domain and role)
+- "relevance_note": 1–2 sentences describing WHY it's relevant and what interview angle it creates
 
 Items:
 ${JSON.stringify(items, null, 2)}
 
-Respond ONLY with a JSON array (no markdown, no commentary):
-[{"idx": 0, "relevance_category": "...", "relevance_score": 0.85, "relevance_note": "..."}, ...]`
+Return ONLY a valid JSON array, no markdown, no extra text.`
 
   try {
     const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
+      model:      'claude-3-5-haiku-20241022',
+      max_tokens: 2048,
+      messages:   [{ role: 'user', content: prompt }],
     })
 
-    const content = message.content[0]
-    if (content.type !== 'text') return
-
-    const jsonMatch = content.text.match(/\[[\s\S]*\]/)
-    if (!jsonMatch) return
-
-    const scores: Array<{
-      idx: number
+    const text = message.content[0].type === 'text' ? message.content[0].text : ''
+    const parsed: Array<{
+      id: string
       relevance_category: string
       relevance_score: number
       relevance_note: string
-    }> = JSON.parse(jsonMatch[0])
+    }> = JSON.parse(text)
 
-    // Write scores back
-    for (const score of scores) {
-      const patch = {
-        relevance_category: score.relevance_category,
-        relevance_score:    score.relevance_score,
-        relevance_note:     score.relevance_note,
-      }
-      if (score.idx < papers.length) {
-        await supabaseAdmin
-          .from('research_papers')
-          .update(patch)
-          .eq('job_id', jobId)
-          .eq('dedup_key', papers[score.idx].dedup_key)
-      } else {
-        const patent = patents[score.idx - papers.length]
-        if (patent) {
-          await supabaseAdmin
-            .from('patents')
-            .update(patch)
-            .eq('job_id', jobId)
-            .eq('dedup_key', patent.dedup_key)
-        }
-      }
+    // Update papers
+    for (const rating of parsed) {
+      await supabaseAdmin
+        .from('research_papers')
+        .update({
+          relevance_category: rating.relevance_category,
+          relevance_score:    rating.relevance_score,
+          relevance_note:     rating.relevance_note,
+        })
+        .eq('job_id', jobId)
+        .eq('external_id', rating.id)
+
+      // Also try patents
+      await supabaseAdmin
+        .from('patents')
+        .update({
+          relevance_category: rating.relevance_category,
+          relevance_score:    rating.relevance_score,
+          relevance_note:     rating.relevance_note,
+        })
+        .eq('job_id', jobId)
+        .eq('patent_id', rating.id)
     }
   } catch (e) {
     console.error('claudeSynthesis:', e)
-    // Non-fatal — research data is still stored, just unscored
   }
 }
 
-// ─── Supabase write helpers ───────────────────────────────────────────────
+// ─── Helpers: Supabase writes ─────────────────────────────────────────────────
 
-async function upsertCompanyProfile(jobId: string, data: CrunchbaseResult) {
-  await supabaseAdmin.from('company_profiles').upsert(
-    {
-      job_id:               jobId,
-      short_description:    data.short_description,
-      description:          data.description,
-      founded_year:         data.founded_year,
-      employee_count_label: data.employee_count_label,
-      employee_count_min:   data.employee_count_min,
-      employee_count_max:   data.employee_count_max,
-      total_funding_usd:    data.total_funding_usd,
-      last_round_type:      data.last_round_type,
-      last_round_date:      data.last_round_date,
-      crunchbase_url:       data.crunchbase_url,
-      linkedin_url:         data.linkedin_url,
-      twitter_url:          data.twitter_url,
-      raw_crunchbase:       data.raw as object,
-      last_crunchbase_fetch: new Date().toISOString(),
-      updated_at:           new Date().toISOString(),
-    },
-    { onConflict: 'job_id' }
-  )
-}
+async function saveCompanyProfile(
+  jobId: string,
+  intel: CompanyIntelligenceResult
+): Promise<void> {
+  const existing = await supabaseAdmin
+    .from('company_profiles')
+    .select('id')
+    .eq('job_id', jobId)
+    .maybeSingle()
 
-async function upsertEntities(jobId: string, entities: Entity[]) {
-  for (const e of entities) {
-    const dedup_key = `${jobId}:${e.name.toLowerCase().replace(/\s+/g, ' ').trim()}`
-    await supabaseAdmin.from('company_entities').upsert(
-      {
-        job_id: jobId, entity_type: e.entity_type,
-        name: e.name, title: e.title,
-        linkedin_url: e.linkedin_url,
-        source: e.source, source_url: e.source_url,
-        dedup_key,
-      },
-      { onConflict: 'dedup_key' }
-    )
+  const payload = {
+    job_id:         jobId,
+    description:    intel.description,
+    employee_count: intel.employee_count,
+    founded_year:   intel.founded_year,
+    hq_location:    intel.hq_location,
+    funding_total:  intel.funding_total,
+    funding_stage:  intel.funding_stage,
+    ceo_name:       intel.ceo_name,
+    ceo_linkedin:   intel.ceo_linkedin,
+    website:        intel.website,
+    updated_at:     new Date().toISOString(),
+  }
+
+  if (existing.data) {
+    await supabaseAdmin.from('company_profiles').update(payload).eq('job_id', jobId)
+  } else {
+    await supabaseAdmin.from('company_profiles').insert(payload)
   }
 }
 
-async function upsertPapers(jobId: string, papers: Paper[]) {
-  const { data: entityRows } = await supabaseAdmin
-    .from('company_entities').select('id, name').eq('job_id', jobId)
+async function saveEntities(
+  jobId: string,
+  entities: CompanyIntelligenceResult['entities']
+): Promise<void> {
+  for (const entity of entities) {
+    const dedup = `${jobId}:${entity.name.toLowerCase()}`
+    await supabaseAdmin
+      .from('company_entities')
+      .upsert(
+        { job_id: jobId, ...entity, dedup_key: dedup },
+        { onConflict: 'dedup_key' }
+      )
+  }
+}
 
-  const entityMap: Record<string, string> = {}
-  for (const e of entityRows ?? []) entityMap[e.name.toLowerCase().trim()] = e.id
+async function saveInvestors(
+  jobId: string,
+  investors: CompanyIntelligenceResult['investors']
+): Promise<void> {
+  for (const inv of investors) {
+    const dedup = `${jobId}:${inv.name.toLowerCase()}`
+    await supabaseAdmin
+      .from('company_investors')
+      .upsert(
+        { job_id: jobId, ...inv, dedup_key: dedup },
+        { onConflict: 'dedup_key' }
+      )
+  }
+}
 
+async function savePapers(jobId: string, papers: RawPaper[]): Promise<void> {
   for (const paper of papers) {
-    await supabaseAdmin.from('research_papers').upsert(
-      {
-        job_id:         jobId,
-        entity_id:      entityMap[paper.entity_name.toLowerCase().trim()] ?? null,
-        title:          paper.title,
-        authors:        paper.authors,
-        year:           paper.year,
-        abstract:       paper.abstract,
-        citation_count: paper.citation_count,
-        url:            paper.url,
-        doi:            paper.doi,
-        source:         paper.source,
-        dedup_key:      paper.dedup_key,
-      },
-      { onConflict: 'job_id,dedup_key' }
-    )
+    const dedup = paper.external_id
+    await supabaseAdmin
+      .from('research_papers')
+      .upsert(
+        { job_id: jobId, ...paper, dedup_key: dedup },
+        { onConflict: 'dedup_key' }
+      )
   }
 }
 
-async function upsertPatents(jobId: string, patents: Patent[]) {
-  const { data: entityRows } = await supabaseAdmin
-    .from('company_entities').select('id, name').eq('job_id', jobId)
-
-  const entityMap: Record<string, string> = {}
-  for (const e of entityRows ?? []) entityMap[e.name.toLowerCase().trim()] = e.id
-
+async function savePatents(jobId: string, patents: RawPatent[]): Promise<void> {
   for (const patent of patents) {
-    await supabaseAdmin.from('patents').upsert(
-      {
-        job_id:         jobId,
-        entity_id:      entityMap[patent.entity_name.toLowerCase().trim()] ?? null,
-        title:          patent.title,
-        inventors:      patent.inventors,
-        patent_number:  patent.patent_number,
-        filing_date:    patent.filing_date,
-        grant_date:     patent.grant_date,
-        abstract:       patent.abstract,
-        url:            patent.url,
-        source:         patent.source,
-        dedup_key:      patent.dedup_key,
-      },
-      { onConflict: 'job_id,dedup_key' }
-    )
+    const dedup = patent.patent_id
+      ? `patent:${patent.patent_id}`
+      : `title:${patent.title.toLowerCase().slice(0, 60)}`
+    await supabaseAdmin
+      .from('patents')
+      .upsert(
+        { job_id: jobId, ...patent, dedup_key: dedup },
+        { onConflict: 'dedup_key' }
+      )
   }
 }
 
 async function upsertNewsItems(
-  items: Array<{
-    source: string; item_type: string; title: string;
-    url: string | null; summary: string | null;
-    published_at: string; tags: string[]
-  }>,
+  items: Awaited<ReturnType<typeof fetchNewsInternal>>,
   jobId: string
-) {
-  if (!items.length) return
-  const urls = items.map((i) => i.url).filter(Boolean) as string[]
+): Promise<number> {
+  if (!items.length) return 0
 
+  const urls = items.map((i) => i.url).filter(Boolean)
   const { data: existing } = await supabaseAdmin
-    .from('intel_items').select('url').eq('job_id', jobId).in('url', urls)
+    .from('intel_items')
+    .select('url')
+    .eq('job_id', jobId)
+    .in('url', urls)
 
   const existingUrls = new Set((existing ?? []).map((r: { url: string }) => r.url))
   const newItems = items
-    .filter((i) => i.url && !existingUrls.has(i.url!))
+    .filter((i) => i.url && !existingUrls.has(i.url))
     .map((i) => ({ ...i, job_id: jobId }))
 
-  if (newItems.length) {
-    await supabaseAdmin.from('intel_items').insert(newItems)
-  }
+  if (!newItems.length) return 0
+  const { error } = await supabaseAdmin.from('intel_items').insert(newItems)
+  if (error) { console.error('upsertNewsItems:', error); return 0 }
+  return newItems.length
 }
 
-// ─── Main Inngest function ────────────────────────────────────────────────
+async function markPhaseComplete(researchJobId: string, phase: string): Promise<void> {
+  await supabaseAdmin.rpc('append_phase_complete', {
+    p_research_job_id: researchJobId,
+    p_phase:           phase,
+  })
+}
+
+async function failResearchJob(researchJobId: string, error: string): Promise<void> {
+  await supabaseAdmin
+    .from('research_jobs')
+    .update({ status: 'failed', error_message: error, updated_at: new Date().toISOString() })
+    .eq('id', researchJobId)
+}
+
+// ─── Main Inngest function ────────────────────────────────────────────────────
 
 export const researchAgent = inngest.createFunction(
   {
-    id: 'research-agent',
-    name: 'Job Research Agent',
+    id:      'research-agent',
     retries: 2,
-    onFailure: async ({ error, event }) => {
-      const { researchJobId } = event.data.event.data as { researchJobId: string }
-      await supabaseAdmin.from('research_jobs').update({
-        status: 'failed',
-        error_message: String(error.message ?? error),
-      }).eq('id', researchJobId)
+    onFailure: async ({ event, error }) => {
+      const { researchJobId } = event.data as { researchJobId: string }
+      if (researchJobId) {
+        await failResearchJob(researchJobId, String(error))
+      }
     },
   },
   { event: 'research/job.created' },
   async ({ event, step }) => {
     const { jobId, researchJobId } = event.data as { jobId: string; researchJobId: string }
 
-    // ── P1: Crunchbase discovery ──────────────────────────────────────────
-    const { job, crunchbaseData } = await step.run('p1-discovery', async () => {
-      await setProgress(researchJobId, 5, 'Looking up company on Crunchbase…')
+    // Load job metadata
+    const { data: job } = await supabaseAdmin
+      .from('jobs')
+      .select('company_name, role_title')
+      .eq('id', jobId)
+      .single()
 
-      const { data: jobData } = await supabaseAdmin
-        .from('jobs')
-        .select('id, company_name, role_title')
-        .eq('id', jobId)
-        .single()
+    if (!job) throw new Error(`Job ${jobId} not found`)
 
-      if (!jobData) throw new Error(`Job ${jobId} not found`)
+    // Mark running
+    await supabaseAdmin
+      .from('research_jobs')
+      .update({ status: 'running', updated_at: new Date().toISOString() })
+      .eq('id', researchJobId)
 
-      const crunchbaseData = await fetchCrunchbase(jobData.company_name)
-      if (crunchbaseData) await upsertCompanyProfile(jobId, crunchbaseData)
-
-      await setProgress(
-        researchJobId, 20,
-        crunchbaseData
-          ? `Found: ${crunchbaseData.employee_count_label ?? 'company profile'}`
-          : 'Not in Crunchbase — continuing with other sources',
-        'p1-discovery'
-      )
-      return { job: jobData, crunchbaseData }
+    // ── Phase 1: Company intelligence ───────────────────────────────────────
+    const intel = await step.run('p1-company-intelligence', async () => {
+      const result = await fetchCompanyIntelligence(job.company_name)
+      await saveCompanyProfile(jobId, result)
+      await saveInvestors(jobId, result.investors)
+      await markPhaseComplete(researchJobId, 'p1_company')
+      return result
     })
 
-    // ── P2: Entity enrichment ─────────────────────────────────────────────
-    const entityRows = await step.run('p2-entity-enrichment', async () => {
-      await setProgress(researchJobId, 22, 'Finding key people…')
-
-      const rawEntities = crunchbaseData?.founders?.length
-        ? await enrichWithLinkedIn(crunchbaseData.founders, job.company_name)
-        : await searchForFounders(job.company_name)
-
-      await upsertEntities(jobId, rawEntities)
-
-      const { data } = await supabaseAdmin
-        .from('company_entities').select('id, name').eq('job_id', jobId)
-
-      await setProgress(
-        researchJobId, 38,
-        `Found ${data?.length ?? 0} key people`,
-        'p2-entity-enrichment'
-      )
-      return data ?? []
+    // ── Phase 2: Entity enrichment (LinkedIn URLs) ──────────────────────────
+    const enrichedEntities = await step.run('p2-entity-enrichment', async () => {
+      const entities = await enrichEntitiesWithLinkedIn(intel.entities, job.company_name)
+      await saveEntities(jobId, entities)
+      await markPhaseComplete(researchJobId, 'p2_entities')
+      return entities
     })
 
-    // ── P3: Research papers + patents ─────────────────────────────────────
-    const research = await step.run('p3-research', async () => {
-      await setProgress(researchJobId, 40, 'Searching research papers and patents…')
-
-      const [papers, patents] = await Promise.all([
-        fetchPapersForEntities(entityRows),
-        fetchPatentsForEntities(entityRows, job.company_name),
+    // ── Phase 3: Papers + patents ───────────────────────────────────────────
+    const { papers, patents } = await step.run('p3-research', async () => {
+      const [rawPapers, rawPatents] = await Promise.all([
+        fetchPapersForEntities(enrichedEntities),
+        fetchPatentsForEntities(enrichedEntities, job.company_name),
       ])
-
-      await Promise.all([
-        papers.length  ? upsertPapers(jobId, papers)   : Promise.resolve(),
-        patents.length ? upsertPatents(jobId, patents) : Promise.resolve(),
-      ])
-
-      await setProgress(
-        researchJobId, 65,
-        `Found ${papers.length} papers, ${patents.length} patents`,
-        'p3-research'
-      )
-      return { papers, patents }
+      await savePapers(jobId, rawPapers)
+      await savePatents(jobId, rawPatents)
+      await markPhaseComplete(researchJobId, 'p3_research')
+      return { papers: rawPapers, patents: rawPatents }
     })
 
-    // ── P4: News refresh ──────────────────────────────────────────────────
+    // ── Phase 4: News refresh ───────────────────────────────────────────────
     await step.run('p4-news', async () => {
-      await setProgress(researchJobId, 67, 'Fetching latest news…')
       const newsItems = await fetchNewsInternal(job.company_name, job.role_title)
-      await upsertNewsItems(newsItems, jobId)
-      await setProgress(
-        researchJobId, 80,
-        `News refreshed (${newsItems.length} articles scanned)`,
-        'p4-news'
-      )
+      const inserted  = await upsertNewsItems(newsItems, jobId)
+      await markPhaseComplete(researchJobId, 'p4_news')
+      return { fetched: newsItems.length, inserted }
     })
 
-    // ── P5: Claude synthesis ──────────────────────────────────────────────
+    // ── Phase 5: Claude synthesis ───────────────────────────────────────────
     await step.run('p5-synthesis', async () => {
-      const { papers, patents } = research
-      if (!papers.length && !patents.length) {
-        await setProgress(researchJobId, 100, 'Research complete (no papers/patents found)', 'p5-synthesis')
-        return
-      }
-      await setProgress(researchJobId, 82, 'Scoring relevance with AI…')
       await claudeSynthesis(jobId, job, papers, patents)
-      await setProgress(
-        researchJobId, 100,
-        `Scored ${papers.length + patents.length} items for relevance`,
-        'p5-synthesis'
-      )
+      await markPhaseComplete(researchJobId, 'p5_synthesis')
     })
 
-    // Final status update
-    await supabaseAdmin.from('research_jobs').update({
-      status: 'complete',
-      completed_at: new Date().toISOString(),
-    }).eq('id', researchJobId)
+    // Mark complete
+    await supabaseAdmin
+      .from('research_jobs')
+      .update({
+        status:     'complete',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', researchJobId)
+
+    return { ok: true, jobId, researchJobId }
   }
 )

@@ -1,10 +1,9 @@
 /**
  * POST /api/research/start
- * Body: { job_id: string, trigger?: "job_added"|"weekly"|"intel_triggered"|"manual" }
+ * Body: { job_id: string }
  *
- * Creates a research_jobs row and fires the Inngest event.
- * Returns 202 immediately — the agent runs asynchronously.
- * If a job is already running/pending for this job, returns the existing ID.
+ * Creates a research_jobs row and fires research/job.created to Inngest.
+ * Idempotent — returns existing job if one is already pending/running.
  */
 
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
@@ -14,23 +13,19 @@ import { createClient } from '@supabase/supabase-js'
 import { inngest } from '@/inngest/client'
 
 const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_URL         ?? '',
+  process.env.SUPABASE_SERVICE_ROLE_KEY        ??
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
 )
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const { job_id: jobId, trigger = 'manual' } = body as {
-      job_id: string
-      trigger?: string
-    }
-
+    const { job_id: jobId } = await request.json()
     if (!jobId) {
       return NextResponse.json({ ok: false, error: 'job_id required' }, { status: 400 })
     }
 
-    // Verify auth
+    // Auth check
     const cookieStore = await cookies()
     const userSupabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -55,7 +50,7 @@ export async function POST(request: NextRequest) {
     // Verify job ownership
     const { data: job } = await supabaseAdmin
       .from('jobs')
-      .select('id, company_name')
+      .select('id, company_name, role_title')
       .eq('id', jobId)
       .eq('user_id', user.id)
       .single()
@@ -64,7 +59,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Job not found' }, { status: 404 })
     }
 
-    // Idempotency check — don't queue if already pending/running
+    // Idempotency: return existing job if already pending/running
     const { data: existing } = await supabaseAdmin
       .from('research_jobs')
       .select('id, status')
@@ -75,41 +70,38 @@ export async function POST(request: NextRequest) {
       .maybeSingle()
 
     if (existing) {
-      return NextResponse.json({
-        ok: true,
-        research_job_id: existing.id,
-        already_running: true,
-      })
+      return NextResponse.json({ ok: true, research_job_id: existing.id, status: existing.status })
     }
 
-    // Create research job row
-    const { data: researchJob, error } = await supabaseAdmin
+    // Create new research_jobs row
+    const { data: researchJob, error: createError } = await supabaseAdmin
       .from('research_jobs')
       .insert({
-        job_id:           jobId,
-        user_id:          user.id,
-        status:           'pending',
-        trigger,
-        progress_pct:     0,
-        progress_message: 'Queued…',
+        job_id:  jobId,
+        status:  'pending',
+        trigger: 'manual',
+        phases_complete: [],
       })
       .select()
       .single()
 
-    if (error || !researchJob) {
-      console.error('create research_job:', error)
-      return NextResponse.json({ ok: false, error: 'Failed to queue research job' }, { status: 500 })
+    if (createError || !researchJob) {
+      console.error('create research_job:', createError)
+      return NextResponse.json({ ok: false, error: 'Failed to create research job' }, { status: 500 })
     }
 
-    // Fire Inngest event (non-blocking)
+    // Fire Inngest event
     await inngest.send({
       name: 'research/job.created',
       data: { jobId, researchJobId: researchJob.id },
     })
 
-    return NextResponse.json({ ok: true, research_job_id: researchJob.id }, { status: 202 })
+    return NextResponse.json(
+      { ok: true, research_job_id: researchJob.id, status: 'pending' },
+      { status: 202 }
+    )
   } catch (err) {
-    console.error('/api/research/start:', err)
+    console.error('/api/research/start error:', err)
     return NextResponse.json({ ok: false, error: String(err) }, { status: 500 })
   }
 }

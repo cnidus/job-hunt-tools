@@ -4,14 +4,14 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 
-import Header           from '@/components/Header'
-import IntelFeed        from '@/components/IntelFeed'
-import DailyTasks       from '@/components/DailyTasks'
+import Header from '@/components/Header'
+import IntelFeed from '@/components/IntelFeed'
+import DailyTasks from '@/components/DailyTasks'
 import MasteryChecklist from '@/components/MasteryChecklist'
-import ResearchNotes    from '@/components/ResearchNotes'
-import CompanyProfile   from '@/components/CompanyProfile'
-import ResearchPapers   from '@/components/ResearchPapers'
+import ResearchNotes from '@/components/ResearchNotes'
 import ResearchJobStatus from '@/components/ResearchJobStatus'
+import CompanyProfile from '@/components/CompanyProfile'
+import ResearchPapers from '@/components/ResearchPapers'
 
 import {
   fetchJob,
@@ -31,7 +31,7 @@ import type {
 } from '@/lib/types'
 import { isUnread } from '@/lib/types'
 
-// ─── Daily task templates (7-day rotation) ────────────────────────────────
+// ─── Generic SE interview prep templates (7 days) ─────────────────────────────
 
 const DAILY_TEMPLATES: Omit<DailyTask, 'id' | 'task_date' | 'completed_at' | 'notes' | 'job_id'>[][] = [
   // Sunday (0) — Company & culture
@@ -73,14 +73,14 @@ const DAILY_TEMPLATES: Omit<DailyTask, 'id' | 'task_date' | 'completed_at' | 'no
   [
     { title: 'Study the integrations ecosystem', detail: 'What tools does this product connect with? How does it fit into a typical customer stack?', category: 'technical', sort_order: 1 },
     { title: 'Prepare your objection-handling playbook', detail: 'Top 3–5 objections customers raise. Prepare a concise, confident response for each.', category: 'presales', sort_order: 2 },
-    { title: 'Build a technical discovery question list', detail: 'What 10 questions would you ask in discovery to understand a prospect\'s environment and pain?', category: 'presales', sort_order: 3 },
+    { title: 'Build a technical discovery question list', detail: "What 10 questions would you ask in discovery to understand a prospect's environment and pain?", category: 'presales', sort_order: 3 },
     { title: 'Set up your ongoing learning routine', detail: 'Newsletters, podcasts, or communities to follow weekly. Build a 30-min/day habit before the interview.', category: 'company', sort_order: 4 },
   ],
   // Saturday (6) — Review & gap analysis
   [
     { title: 'Do a full mock interview (30–45 min)', detail: 'Ask a colleague or use AI to run a technical + behavioral interview. Record and review critically.', category: 'presales', sort_order: 1 },
     { title: 'Review your research notes from this week', detail: 'Synthesize: what are the 3 most important things you now know? What gaps remain?', category: 'company', sort_order: 2 },
-    { title: 'Review your mastery checklist', detail: 'Check off what you have genuinely internalized. Be honest. Plan next week\'s focus areas.', category: 'company', sort_order: 3 },
+    { title: 'Review your mastery checklist', detail: "Check off what you have genuinely internalized. Be honest. Plan next week's focus areas.", category: 'company', sort_order: 3 },
     { title: 'Tailor your resume / LinkedIn for this role', detail: 'Update highlights to match the JD language. Does your top experience reflect what they care about?', category: 'presales', sort_order: 4 },
   ],
 ]
@@ -104,51 +104,72 @@ export default function JobHub({ jobId }: Props) {
   const router = useRouter()
   const [tab, setTab] = useState<Tab>('feed')
 
-  const [job,           setJob]           = useState<Job | null>(null)
-  const [intelItems,    setIntelItems]     = useState<IntelItem[]>([])
-  const [dailyTasks,    setDailyTasks]     = useState<DailyTask[]>([])
-  const [masteryItems,  setMasteryItems]   = useState<MasteryItem[]>([])
-  const [notes,         setNotes]          = useState<ResearchNote[]>([])
-  const [researchJob,   setResearchJob]    = useState<ResearchJob | null>(null)
-  const [companyProfile,setCompanyProfile] = useState<CompanyProfileType | null>(null)
-  const [entities,      setEntities]       = useState<CompanyEntity[]>([])
-  const [investors,     setInvestors]      = useState<CompanyInvestor[]>([])
-  const [papers,        setPapers]         = useState<ResearchPaper[]>([])
-  const [patents,       setPatents]        = useState<ResearchPatent[]>([])
+  const [job,          setJob]          = useState<Job | null>(null)
+  const [intelItems,   setIntelItems]   = useState<IntelItem[]>([])
+  const [dailyTasks,   setDailyTasks]   = useState<DailyTask[]>([])
+  const [masteryItems, setMasteryItems] = useState<MasteryItem[]>([])
+  const [notes,        setNotes]        = useState<ResearchNote[]>([])
+
+  // Research pipeline state
+  const [researchJob,    setResearchJob]    = useState<ResearchJob | null>(null)
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfileType | null>(null)
+  const [entities,       setEntities]       = useState<CompanyEntity[]>([])
+  const [investors,      setInvestors]      = useState<CompanyInvestor[]>([])
+  const [papers,         setPapers]         = useState<ResearchPaper[]>([])
+  const [patents,        setPatents]        = useState<ResearchPatent[]>([])
+  const [startingResearch, setStartingResearch] = useState(false)
 
   const [loading,    setLoading]    = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [startingResearch, setStartingResearch] = useState(false)
 
   const todayStr = format(new Date(), 'yyyy-MM-dd')
 
-  // ── Initial load ───────────────────────────────────────────────────────────
+  // ── Load research data ───────────────────────────────────────────────────────
+  const loadResearchData = useCallback(async () => {
+    const [rj, profile, ents, invs, paps, pats] = await Promise.all([
+      fetchLatestResearchJob(jobId),
+      fetchCompanyProfile(jobId),
+      fetchCompanyEntities(jobId),
+      fetchCompanyInvestors(jobId),
+      fetchResearchPapers(jobId),
+      fetchPatents(jobId),
+    ])
+    setResearchJob(rj)
+    setCompanyProfile(profile)
+    setEntities(ents)
+    setInvestors(invs)
+    setPapers(paps)
+    setPatents(pats)
+  }, [jobId])
+
+  // ── Initial load ─────────────────────────────────────────────────────────────
   useEffect(() => {
     async function load() {
       setLoading(true)
 
-      const [jobData, items, tasks, mastery, fetchedNotes, rJob] = await Promise.all([
+      const [jobData, items, tasks, mastery, fetchedNotes] = await Promise.all([
         fetchJob(jobId),
         fetchIntelItems(jobId),
         fetchTasksForDate(todayStr, jobId),
         fetchMasteryItems(jobId),
         fetchNotes(jobId),
-        fetchLatestResearchJob(jobId),
       ])
 
-      if (!jobData) { router.push('/'); return }
+      if (!jobData) {
+        router.push('/')
+        return
+      }
 
       setJob(jobData)
       setIntelItems(items)
       setMasteryItems(mastery)
       setNotes(fetchedNotes)
-      setResearchJob(rJob)
 
-      // Seed today's tasks if none exist
       if (tasks.length === 0) {
-        const dow = new Date().getDay()
+        const dow       = new Date().getDay()
+        const templates = DAILY_TEMPLATES[dow]
         const seeded: DailyTask[] = []
-        for (const t of DAILY_TEMPLATES[dow]) {
+        for (const t of templates) {
           const task = await upsertTask(
             { ...t, task_date: todayStr, completed_at: null, notes: null },
             jobId
@@ -160,80 +181,55 @@ export default function JobHub({ jobId }: Props) {
         setDailyTasks(tasks)
       }
 
-      // Load company/research data if research has completed
-      if (rJob?.status === 'complete') {
-        const [profile, ents, invs, paps, pats] = await Promise.all([
-          fetchCompanyProfile(jobId),
-          fetchCompanyEntities(jobId),
-          fetchCompanyInvestors(jobId),
-          fetchResearchPapers(jobId),
-          fetchPatents(jobId),
-        ])
-        setCompanyProfile(profile)
-        setEntities(ents)
-        setInvestors(invs)
-        setPapers(paps)
-        setPatents(pats)
-      }
-
+      await loadResearchData()
       setLoading(false)
     }
     load()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId])
 
-  // ── Poll research job status while running ─────────────────────────────────
+  // ── Poll while research is active ────────────────────────────────────────────
   useEffect(() => {
-    if (!researchJob || (researchJob.status !== 'pending' && researchJob.status !== 'running')) return
+    if (!researchJob) return
+    if (researchJob.status !== 'pending' && researchJob.status !== 'running') return
 
     const interval = setInterval(async () => {
-      const res = await fetch(`/api/research/status?job_id=${jobId}`)
-      const { research_job: rJob } = await res.json()
-      if (!rJob) return
+      const res  = await fetch(`/api/research/status?job_id=${jobId}`)
+      const json = await res.json()
+      const rj: ResearchJob | null = json.research_job
 
-      setResearchJob(rJob)
-
-      if (rJob.status === 'complete') {
-        clearInterval(interval)
-        const [profile, ents, invs, paps, pats] = await Promise.all([
-          fetchCompanyProfile(jobId),
-          fetchCompanyEntities(jobId),
-          fetchCompanyInvestors(jobId),
-          fetchResearchPapers(jobId),
-          fetchPatents(jobId),
-        ])
-        setCompanyProfile(profile)
-        setEntities(ents)
-        setInvestors(invs)
-        setPapers(paps)
-        setPatents(pats)
+      if (rj) {
+        setResearchJob(rj)
+        if (rj.status === 'complete' || rj.status === 'failed') {
+          clearInterval(interval)
+          if (rj.status === 'complete') await loadResearchData()
+        }
       }
     }, 5000)
 
     return () => clearInterval(interval)
-  }, [researchJob?.status, jobId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [researchJob?.id, researchJob?.status, jobId, loadResearchData])
 
-  // ── Start research ─────────────────────────────────────────────────────────
+  // ── Start / re-run research ───────────────────────────────────────────────────
   const handleStartResearch = useCallback(async () => {
     setStartingResearch(true)
     try {
-      const res = await fetch('/api/research/start', {
-        method: 'POST',
+      const res  = await fetch('/api/research/start', {
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: jobId, trigger: 'manual' }),
+        body:    JSON.stringify({ job_id: jobId }),
       })
-      const { research_job_id } = await res.json()
-      if (research_job_id) {
-        const statusRes = await fetch(`/api/research/status?job_id=${jobId}`)
-        const { research_job } = await statusRes.json()
-        setResearchJob(research_job)
+      const json = await res.json()
+      if (json.ok) {
+        // Immediately fetch the new research_jobs row
+        await loadResearchData()
       }
     } finally {
       setStartingResearch(false)
     }
-  }, [jobId])
+  }, [jobId, loadResearchData])
 
-  // ── Intel refresh ──────────────────────────────────────────────────────────
+  // ── Refresh intel ─────────────────────────────────────────────────────────────
   const handleRefresh = useCallback(async () => {
     setRefreshing(true)
     try {
@@ -245,43 +241,51 @@ export default function JobHub({ jobId }: Props) {
     }
   }, [jobId])
 
-  // ── Intel actions ──────────────────────────────────────────────────────────
+  // ── Intel actions ─────────────────────────────────────────────────────────────
   const handleIntelAction = useCallback(async (itemId: string, action: ActionType) => {
     await recordAction(itemId, action)
-    setIntelItems(await fetchIntelItems(jobId))
+    const fresh = await fetchIntelItems(jobId)
+    setIntelItems(fresh)
   }, [jobId])
 
   const handleAddManual = useCallback(async (form: {
     title: string; url: string; summary: string; item_type: string
   }) => {
     const item = await addIntelItem({
-      job_id: jobId, source: 'manual',
-      item_type: form.item_type as IntelItem['item_type'],
-      title: form.title, url: form.url || null,
-      summary: form.summary || null,
+      job_id:       jobId,
+      source:       'manual',
+      item_type:    form.item_type as IntelItem['item_type'],
+      title:        form.title,
+      url:          form.url || null,
+      summary:      form.summary || null,
       published_at: new Date().toISOString(),
-      tags: ['manual'], metadata: {},
+      tags:         ['manual'],
+      metadata:     {},
     }, jobId)
     if (item) setIntelItems((prev) => [item, ...prev])
   }, [jobId])
 
-  // ── Task actions ───────────────────────────────────────────────────────────
+  // ── Task actions ──────────────────────────────────────────────────────────────
   const handleToggleTask = useCallback(async (id: string, completed: boolean) => {
     await completeTask(id, completed)
     setDailyTasks((prev) =>
-      prev.map((t) => t.id === id ? { ...t, completed_at: completed ? new Date().toISOString() : null } : t)
+      prev.map((t) =>
+        t.id === id ? { ...t, completed_at: completed ? new Date().toISOString() : null } : t
+      )
     )
   }, [])
 
-  // ── Mastery actions ────────────────────────────────────────────────────────
+  // ── Mastery actions ───────────────────────────────────────────────────────────
   const handleToggleMastery = useCallback(async (id: string, completed: boolean) => {
     await completeMasteryItem(id, completed, jobId)
     setMasteryItems((prev) =>
-      prev.map((m) => m.id === id ? { ...m, completed_at: completed ? new Date().toISOString() : null } : m)
+      prev.map((m) =>
+        m.id === id ? { ...m, completed_at: completed ? new Date().toISOString() : null } : m
+      )
     )
   }, [jobId])
 
-  // ── Note actions ───────────────────────────────────────────────────────────
+  // ── Note actions ──────────────────────────────────────────────────────────────
   const handleSaveNote = useCallback(async (note: Omit<ResearchNote, 'id' | 'created_at' | 'updated_at'>) => {
     const saved = await saveNote(note, jobId)
     if (saved) setNotes((prev) => [saved, ...prev])
@@ -299,12 +303,12 @@ export default function JobHub({ jobId }: Props) {
     setNotes((prev) => prev.filter((n) => n.id !== id))
   }, [])
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-  const unreadCount     = intelItems.filter(isUnread).length
-  const pendingTasks    = dailyTasks.filter((t) => !t.completed_at).length
-  const researchActive  = researchJob?.status === 'pending' || researchJob?.status === 'running'
+  // ── Derived ───────────────────────────────────────────────────────────────────
+  const unreadCount         = intelItems.filter(isUnread).length
+  const researchActive      = researchJob?.status === 'pending' || researchJob?.status === 'running'
+  const incompleteTasks     = dailyTasks.filter((t) => !t.completed_at).length
 
-  // ───────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-[#f4f6fb]">
       <Header
@@ -334,13 +338,13 @@ export default function JobHub({ jobId }: Props) {
                     {unreadCount}
                   </span>
                 )}
-                {t.id === 'tasks' && pendingTasks > 0 && (
+                {t.id === 'tasks' && incompleteTasks > 0 && (
                   <span className="ml-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-orange-100 text-orange-600">
-                    {pendingTasks}
+                    {incompleteTasks}
                   </span>
                 )}
-                {t.id === 'company' && researchActive && (
-                  <span className="ml-1 w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse inline-block" />
+                {(t.id === 'company' || t.id === 'research') && researchActive && (
+                  <span className="ml-1 w-2 h-2 rounded-full bg-blue-500 animate-pulse inline-block" />
                 )}
               </button>
             ))}
@@ -360,7 +364,11 @@ export default function JobHub({ jobId }: Props) {
         ) : (
           <div className="max-w-3xl">
             {tab === 'feed' && (
-              <IntelFeed items={intelItems} onAction={handleIntelAction} onAddManual={handleAddManual} />
+              <IntelFeed
+                items={intelItems}
+                onAction={handleIntelAction}
+                onAddManual={handleAddManual}
+              />
             )}
             {tab === 'tasks' && (
               <DailyTasks tasks={dailyTasks} onToggle={handleToggleTask} />
@@ -377,10 +385,11 @@ export default function JobHub({ jobId }: Props) {
               />
             )}
             {tab === 'company' && (
-              <>
+              <div className="space-y-4">
                 <ResearchJobStatus
                   researchJob={researchJob}
-                  onStartResearch={handleStartResearch}
+                  onStart={handleStartResearch}
+                  onRerun={handleStartResearch}
                   starting={startingResearch}
                 />
                 <CompanyProfile
@@ -388,17 +397,18 @@ export default function JobHub({ jobId }: Props) {
                   entities={entities}
                   investors={investors}
                 />
-              </>
+              </div>
             )}
             {tab === 'research' && (
-              <>
+              <div className="space-y-4">
                 <ResearchJobStatus
                   researchJob={researchJob}
-                  onStartResearch={handleStartResearch}
+                  onStart={handleStartResearch}
+                  onRerun={handleStartResearch}
                   starting={startingResearch}
                 />
                 <ResearchPapers papers={papers} patents={patents} />
-              </>
+              </div>
             )}
           </div>
         )}

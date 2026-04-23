@@ -3,176 +3,142 @@
 import type { CompanyProfile, CompanyEntity, CompanyInvestor } from '@/lib/types'
 
 interface Props {
-  profile: CompanyProfile | null
-  entities: CompanyEntity[]
+  profile:   CompanyProfile | null
+  entities:  CompanyEntity[]
   investors: CompanyInvestor[]
 }
 
-function formatUSD(n: number | null): string {
-  if (!n) return '—'
-  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(1)}B`
-  if (n >= 1_000_000)     return `$${(n / 1_000_000).toFixed(0)}M`
-  if (n >= 1_000)         return `$${(n / 1_000).toFixed(0)}K`
-  return `$${n}`
+function formatUSD(millions: number | null): string {
+  if (millions === null) return '—'
+  if (millions >= 1000) return `$${(millions / 1000).toFixed(1)}B`
+  return `$${millions}M`
 }
 
-function Chip({ children, href }: { children: React.ReactNode; href?: string | null }) {
-  const cls = 'inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-600 border border-gray-200'
-  if (href) {
-    return <a href={href} target="_blank" rel="noopener noreferrer" className={cls + ' hover:bg-gray-200 transition-colors'}>{children}</a>
-  }
-  return <span className={cls}>{children}</span>
-}
+const ROLE_ORDER = ['founder', 'ceo', 'cto', 'vp', 'advisor', 'board', 'investor']
 
-function SectionHead({ title }: { title: string }) {
-  return <h3 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-3">{title}</h3>
+const ROLE_BADGES: Record<string, string> = {
+  founder:  'bg-blue-100 text-blue-700',
+  ceo:      'bg-purple-100 text-purple-700',
+  cto:      'bg-indigo-100 text-indigo-700',
+  vp:       'bg-teal-100 text-teal-700',
+  advisor:  'bg-yellow-100 text-yellow-700',
+  board:    'bg-orange-100 text-orange-700',
+  investor: 'bg-green-100 text-green-700',
 }
 
 export default function CompanyProfile({ profile, entities, investors }: Props) {
-  const founders   = entities.filter(e => e.entity_type === 'founder' || e.entity_type === 'executive')
-  const leadInvest = investors.filter(i => i.lead_investor)
-  const otherInvest= investors.filter(i => !i.lead_investor)
-
-  if (!profile && !entities.length) {
+  if (!profile) {
     return (
-      <div className="text-center py-16 text-gray-400">
-        <div className="text-4xl mb-3">🏢</div>
-        <p className="text-sm font-medium text-gray-600 mb-1">No company data yet</p>
-        <p className="text-xs text-gray-400">Run the research agent to fetch Crunchbase data, founder profiles, and funding history.</p>
+      <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-gray-400 text-sm">
+        No company data yet. Run research to populate this section.
       </div>
     )
   }
 
+  const sortedEntities = [...entities].sort((a, b) => {
+    return (ROLE_ORDER.indexOf(a.role) ?? 99) - (ROLE_ORDER.indexOf(b.role) ?? 99)
+  })
+
   return (
-    <div className="space-y-6">
-
-      {/* ── Company snapshot ──────────────────────────────────────────────── */}
-      {profile && (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-          <SectionHead title="Company Snapshot" />
-
-          {profile.short_description && (
-            <p className="text-sm text-gray-700 mb-4 leading-relaxed">{profile.short_description}</p>
-          )}
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
-            {profile.founded_year && (
-              <div className="bg-gray-50 rounded-lg p-3">
-                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Founded</div>
-                <div className="text-sm font-bold text-gray-800">{profile.founded_year}</div>
-              </div>
-            )}
-            {profile.employee_count_label && (
-              <div className="bg-gray-50 rounded-lg p-3">
-                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Team size</div>
-                <div className="text-sm font-bold text-gray-800">{profile.employee_count_label}</div>
-              </div>
-            )}
-            {profile.total_funding_usd && (
-              <div className="bg-gray-50 rounded-lg p-3">
-                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Total raised</div>
-                <div className="text-sm font-bold text-gray-800">{formatUSD(profile.total_funding_usd)}</div>
-              </div>
-            )}
-            {profile.last_round_type && (
-              <div className="bg-gray-50 rounded-lg p-3">
-                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Last round</div>
-                <div className="text-sm font-bold text-gray-800">{profile.last_round_type}</div>
-                {profile.last_round_date && (
-                  <div className="text-[10px] text-gray-400 mt-0.5">
-                    {new Date(profile.last_round_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
-                  </div>
-                )}
-              </div>
-            )}
+    <div className="space-y-4">
+      {/* Snapshot stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Employees',    value: profile.employee_count ?? '—' },
+          { label: 'Founded',      value: profile.founded_year?.toString() ?? '—' },
+          { label: 'HQ',           value: profile.hq_location ?? '—' },
+          { label: 'Total Raised', value: formatUSD(profile.funding_total) },
+        ].map((stat) => (
+          <div key={stat.label} className="bg-white rounded-xl border border-gray-200 p-4 text-center">
+            <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">{stat.label}</p>
+            <p className="text-sm font-bold text-gray-800 truncate" title={stat.value}>{stat.value}</p>
           </div>
+        ))}
+      </div>
 
-          {/* Links */}
-          <div className="flex flex-wrap gap-2">
-            {profile.crunchbase_url && <Chip href={profile.crunchbase_url}>📊 Crunchbase</Chip>}
-            {profile.linkedin_url   && <Chip href={profile.linkedin_url}>💼 LinkedIn</Chip>}
-            {profile.twitter_url    && <Chip href={profile.twitter_url}>𝕏 Twitter</Chip>}
-          </div>
-
-          {profile.last_crunchbase_fetch && (
-            <p className="text-[10px] text-gray-300 mt-3">
-              Crunchbase data as of {new Date(profile.last_crunchbase_fetch).toLocaleDateString()}
-            </p>
+      {/* Description */}
+      {profile.description && (
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">About</p>
+          <p className="text-sm text-gray-700 leading-relaxed">{profile.description}</p>
+          {profile.website && (
+            <a
+              href={profile.website}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block mt-2 text-xs text-[#3d74cc] hover:underline"
+            >
+              {profile.website} ↗
+            </a>
           )}
         </div>
       )}
 
-      {/* ── Key people ────────────────────────────────────────────────────── */}
-      {founders.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-          <SectionHead title="Key People" />
+      {/* Funding */}
+      {(profile.funding_total || profile.funding_stage) && (
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Funding</p>
+          <div className="flex items-center gap-4">
+            {profile.funding_total && (
+              <div>
+                <p className="text-xl font-bold text-gray-800">{formatUSD(profile.funding_total)}</p>
+                <p className="text-xs text-gray-400">Total raised</p>
+              </div>
+            )}
+            {profile.funding_stage && (
+              <span className="text-xs px-2.5 py-1 rounded-full bg-green-100 text-green-700 font-medium">
+                {profile.funding_stage}
+              </span>
+            )}
+          </div>
+
+          {investors.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {investors.map((inv) => (
+                <span key={inv.id} className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">
+                  {inv.name}{inv.stage ? ` (${inv.stage})` : ''}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Key people */}
+      {sortedEntities.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-5">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Key People</p>
           <div className="space-y-3">
-            {founders.map((entity) => (
-              <div key={entity.id} className="flex items-center justify-between">
-                <div>
-                  <span className="text-sm font-semibold text-gray-800">{entity.name}</span>
-                  {entity.title && (
-                    <span className="text-xs text-gray-500 ml-2">{entity.title}</span>
-                  )}
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <span className="text-[10px] text-gray-400 uppercase font-semibold">
-                      {entity.entity_type}
+            {sortedEntities.map((entity) => (
+              <div key={entity.id} className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-[#e8effc] flex items-center justify-center text-xs font-bold text-[#3d74cc] shrink-0">
+                  {entity.name.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-gray-800">{entity.name}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium uppercase ${ROLE_BADGES[entity.role] ?? 'bg-gray-100 text-gray-600'}`}>
+                      {entity.role}
                     </span>
-                    <span className="text-[10px] text-gray-300 mx-1">·</span>
-                    <span className="text-[10px] text-gray-400">via {entity.source}</span>
                   </div>
-                </div>
-                <div className="flex gap-1.5">
-                  {entity.linkedin_url && (
-                    <a
-                      href={entity.linkedin_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[11px] px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100 transition-colors"
-                    >
-                      LinkedIn →
-                    </a>
+                  {entity.title && (
+                    <p className="text-xs text-gray-500 truncate">{entity.title}</p>
                   )}
                 </div>
+                {entity.linkedin_url && (
+                  <a
+                    href={entity.linkedin_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 text-xs text-[#0a66c2] hover:underline"
+                    title="LinkedIn"
+                  >
+                    in
+                  </a>
+                )}
               </div>
             ))}
           </div>
-        </div>
-      )}
-
-      {/* ── Investors ─────────────────────────────────────────────────────── */}
-      {(leadInvest.length > 0 || otherInvest.length > 0) && (
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
-          <SectionHead title="Investors" />
-          {leadInvest.length > 0 && (
-            <div className="mb-3">
-              <p className="text-[10px] text-gray-400 uppercase font-semibold mb-2">Lead Investors</p>
-              <div className="flex flex-wrap gap-2">
-                {leadInvest.map((inv) => (
-                  <Chip key={inv.id} href={inv.crunchbase_url}>⭐ {inv.name}</Chip>
-                ))}
-              </div>
-            </div>
-          )}
-          {otherInvest.length > 0 && (
-            <div>
-              {leadInvest.length > 0 && (
-                <p className="text-[10px] text-gray-400 uppercase font-semibold mb-2">Other</p>
-              )}
-              <div className="flex flex-wrap gap-2">
-                {otherInvest.map((inv) => (
-                  <Chip key={inv.id} href={inv.crunchbase_url}>{inv.name}</Chip>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Empty state if profile missing but entities exist ─────────────── */}
-      {!profile && entities.length > 0 && (
-        <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 text-sm text-amber-700">
-          ℹ Company profile data not available (Crunchbase may not have found this company). Key people were sourced from web search.
         </div>
       )}
     </div>

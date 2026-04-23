@@ -5,7 +5,7 @@ import Link from 'next/link'
 import type { User } from '@supabase/supabase-js'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 import type { Job } from '@/lib/types'
-import { JOB_STATUS_LABELS } from '@/lib/types'
+import { JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/lib/types'
 
 interface HeaderProps {
   // Job-specific mode (shown on /jobs/[id])
@@ -143,6 +143,7 @@ export default function Header({ job, unreadCount = 0, onRefresh, refreshing }: 
           <div className="flex flex-wrap gap-2 mt-3">
             {(() => {
               const chips = []
+              const statusColors = JOB_STATUS_COLORS[job.status]
               chips.push(
                 <span key="status" className={`text-xs px-2.5 py-1 rounded-full border border-white/20 bg-white/10`}>
                   {JOB_STATUS_LABELS[job.status]}

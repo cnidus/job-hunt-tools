@@ -365,9 +365,14 @@ export async function deleteNote(id: string): Promise<boolean> {
   return true
 }
 
-// ─── Research jobs ────────────────────────────────────────────────────────────
+// ─── Research pipeline data ───────────────────────────────────────────────────
 
-export async function fetchLatestResearchJob(jobId: string): Promise<import('./types').ResearchJob | null> {
+import type {
+  ResearchJob, CompanyProfile, CompanyEntity,
+  CompanyInvestor, ResearchPaper, ResearchPatent,
+} from './types'
+
+export async function fetchLatestResearchJob(jobId: string): Promise<ResearchJob | null> {
   if (!supabase) return null
   const { data, error } = await supabase
     .from('research_jobs')
@@ -377,12 +382,10 @@ export async function fetchLatestResearchJob(jobId: string): Promise<import('./t
     .limit(1)
     .maybeSingle()
   if (error) { console.error('fetchLatestResearchJob:', error); return null }
-  return data as import('./types').ResearchJob | null
+  return data as ResearchJob | null
 }
 
-// ─── Company profile ──────────────────────────────────────────────────────────
-
-export async function fetchCompanyProfile(jobId: string): Promise<import('./types').CompanyProfile | null> {
+export async function fetchCompanyProfile(jobId: string): Promise<CompanyProfile | null> {
   if (!supabase) return null
   const { data, error } = await supabase
     .from('company_profiles')
@@ -390,38 +393,31 @@ export async function fetchCompanyProfile(jobId: string): Promise<import('./type
     .eq('job_id', jobId)
     .maybeSingle()
   if (error) { console.error('fetchCompanyProfile:', error); return null }
-  return data as import('./types').CompanyProfile | null
+  return data as CompanyProfile | null
 }
 
-// ─── Company entities ─────────────────────────────────────────────────────────
-
-export async function fetchCompanyEntities(jobId: string): Promise<import('./types').CompanyEntity[]> {
+export async function fetchCompanyEntities(jobId: string): Promise<CompanyEntity[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('company_entities')
     .select('*')
     .eq('job_id', jobId)
-    .order('created_at', { ascending: true })
+    .order('role')
   if (error) { console.error('fetchCompanyEntities:', error); return [] }
-  return (data ?? []) as import('./types').CompanyEntity[]
+  return (data ?? []) as CompanyEntity[]
 }
 
-// ─── Company investors ────────────────────────────────────────────────────────
-
-export async function fetchCompanyInvestors(jobId: string): Promise<import('./types').CompanyInvestor[]> {
+export async function fetchCompanyInvestors(jobId: string): Promise<CompanyInvestor[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('company_investors')
     .select('*')
     .eq('job_id', jobId)
-    .order('lead_investor', { ascending: false })
   if (error) { console.error('fetchCompanyInvestors:', error); return [] }
-  return (data ?? []) as import('./types').CompanyInvestor[]
+  return (data ?? []) as CompanyInvestor[]
 }
 
-// ─── Research papers ──────────────────────────────────────────────────────────
-
-export async function fetchResearchPapers(jobId: string): Promise<import('./types').ResearchPaper[]> {
+export async function fetchResearchPapers(jobId: string): Promise<ResearchPaper[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('research_papers')
@@ -429,12 +425,10 @@ export async function fetchResearchPapers(jobId: string): Promise<import('./type
     .eq('job_id', jobId)
     .order('relevance_score', { ascending: false, nullsFirst: false })
   if (error) { console.error('fetchResearchPapers:', error); return [] }
-  return (data ?? []) as import('./types').ResearchPaper[]
+  return (data ?? []) as ResearchPaper[]
 }
 
-// ─── Patents ──────────────────────────────────────────────────────────────────
-
-export async function fetchPatents(jobId: string): Promise<import('./types').ResearchPatent[]> {
+export async function fetchPatents(jobId: string): Promise<ResearchPatent[]> {
   if (!supabase) return []
   const { data, error } = await supabase
     .from('patents')
@@ -442,5 +436,5 @@ export async function fetchPatents(jobId: string): Promise<import('./types').Res
     .eq('job_id', jobId)
     .order('relevance_score', { ascending: false, nullsFirst: false })
   if (error) { console.error('fetchPatents:', error); return [] }
-  return (data ?? []) as import('./types').ResearchPatent[]
+  return (data ?? []) as ResearchPatent[]
 }

@@ -9,28 +9,22 @@ interface Props {
   patents: ResearchPatent[]
 }
 
-type FilterKey = 'all' | RelevanceCategory | 'unscored' | 'patents'
+type Filter = 'all' | 'core_to_company' | 'relevant_to_role' | 'tangential' | 'patents' | 'unscored'
 
-const FILTERS: { id: FilterKey; label: string }[] = [
-  { id: 'all',              label: 'All' },
-  { id: 'core_to_company',  label: '🏛 Core' },
-  { id: 'relevant_to_role', label: '✅ Role' },
-  { id: 'tangential',       label: '↗ Tangential' },
-  { id: 'patents',          label: '📋 Patents' },
-  { id: 'unscored',         label: '⏳ Unscored' },
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: 'all',             label: 'All' },
+  { id: 'core_to_company', label: '🔵 Core' },
+  { id: 'relevant_to_role',label: '🟢 Role' },
+  { id: 'tangential',      label: '🟡 Tangential' },
+  { id: 'patents',         label: '📋 Patents' },
+  { id: 'unscored',        label: '⏳ Unscored' },
 ]
 
 function RelevanceBadge({ category }: { category: RelevanceCategory | null }) {
-  if (!category) {
-    return (
-      <span className="text-[10px] px-2 py-0.5 rounded-full border bg-gray-50 text-gray-400 border-gray-200">
-        Unscored
-      </span>
-    )
-  }
-  const c = RELEVANCE_COLORS[category]
+  if (!category) return <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">Unscored</span>
+  const colors = RELEVANCE_COLORS[category]
   return (
-    <span className={`text-[10px] px-2 py-0.5 rounded-full border ${c.bg} ${c.text} ${c.border}`}>
+    <span className={`text-xs px-2 py-0.5 rounded-full border ${colors.bg} ${colors.text} ${colors.border}`}>
       {RELEVANCE_LABELS[category]}
     </span>
   )
@@ -39,67 +33,68 @@ function RelevanceBadge({ category }: { category: RelevanceCategory | null }) {
 function ScoreBar({ score }: { score: number | null }) {
   if (score === null) return null
   const pct = Math.round(score * 100)
-  const color = pct >= 70 ? 'bg-purple-400' : pct >= 40 ? 'bg-green-400' : 'bg-gray-300'
+  const color = score >= 0.7 ? 'bg-blue-500' : score >= 0.4 ? 'bg-green-500' : 'bg-yellow-400'
   return (
-    <div className="flex items-center gap-1.5 mt-1">
-      <div className="flex-1 h-1 bg-gray-100 rounded-full overflow-hidden">
-        <div className={`h-1 rounded-full ${color}`} style={{ width: `${pct}%` }} />
+    <div className="flex items-center gap-2 mt-1">
+      <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden">
+        <div className={`h-full ${color} rounded-full`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-[10px] text-gray-400 w-6 text-right">{pct}%</span>
+      <span className="text-[10px] text-gray-400 w-7 text-right">{pct}%</span>
     </div>
   )
 }
 
 function PaperCard({ paper }: { paper: ResearchPaper }) {
   const [expanded, setExpanded] = useState(false)
-  const authors = (paper.authors ?? []).map(a => a.name).join(', ')
-
   return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+    <div className="bg-white rounded-xl border border-gray-200 p-5">
       <div className="flex items-start justify-between gap-3 mb-2">
         <div className="flex-1 min-w-0">
-          {paper.url ? (
-            <a
-              href={paper.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm font-semibold text-gray-800 hover:text-blue-600 transition-colors leading-snug"
-            >
-              {paper.title}
-            </a>
-          ) : (
-            <p className="text-sm font-semibold text-gray-800 leading-snug">{paper.title}</p>
-          )}
-          <p className="text-xs text-gray-400 mt-0.5">
-            {authors && <span>{authors} · </span>}
-            {paper.year && <span>{paper.year} · </span>}
-            {paper.citation_count != null && paper.citation_count > 0 && (
-              <span>{paper.citation_count.toLocaleString()} citations · </span>
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <RelevanceBadge category={paper.relevance_category} />
+            {paper.year && <span className="text-xs text-gray-400">{paper.year}</span>}
+            {paper.citation_count > 0 && (
+              <span className="text-xs text-gray-400">{paper.citation_count.toLocaleString()} citations</span>
             )}
-            <span className="capitalize">{paper.source.replace('_', ' ')}</span>
-          </p>
+          </div>
+          <h3 className="text-sm font-semibold text-gray-800 leading-snug">
+            {paper.url ? (
+              <a href={paper.url} target="_blank" rel="noopener noreferrer" className="hover:text-[#3d74cc] hover:underline">
+                {paper.title}
+              </a>
+            ) : paper.title}
+          </h3>
+          <ScoreBar score={paper.relevance_score} />
         </div>
-        <RelevanceBadge category={paper.relevance_category} />
       </div>
 
-      <ScoreBar score={paper.relevance_score} />
+      {paper.authors.length > 0 && (
+        <p className="text-xs text-gray-500 mb-2">
+          {paper.authors.slice(0, 4).join(', ')}{paper.authors.length > 4 ? ` +${paper.authors.length - 4}` : ''}
+          {paper.venue ? ` · ${paper.venue}` : ''}
+        </p>
+      )}
+
+      {paper.entity_name && (
+        <p className="text-xs text-[#3d74cc] mb-2">Found via {paper.entity_name}</p>
+      )}
 
       {paper.relevance_note && (
-        <p className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed border border-gray-100">
-          💡 {paper.relevance_note}
-        </p>
+        <div className="mt-2 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+          <p className="text-xs text-blue-700 leading-relaxed">💡 {paper.relevance_note}</p>
+        </div>
       )}
 
       {paper.abstract && (
         <div className="mt-2">
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-xs text-blue-500 hover:text-blue-700 transition-colors"
+            className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
           >
-            {expanded ? 'Hide abstract ↑' : 'Show abstract ↓'}
+            {expanded ? '▲ Hide abstract' : '▼ Show abstract'}
           </button>
           {expanded && (
-            <p className="text-xs text-gray-500 mt-1.5 leading-relaxed">{paper.abstract}</p>
+            <p className="mt-2 text-xs text-gray-600 leading-relaxed">{paper.abstract}</p>
           )}
         </div>
       )}
@@ -109,54 +104,53 @@ function PaperCard({ paper }: { paper: ResearchPaper }) {
 
 function PatentCard({ patent }: { patent: ResearchPatent }) {
   const [expanded, setExpanded] = useState(false)
-  const inventors = (patent.inventors ?? []).map(i => i.name).join(', ')
-
   return (
-    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+    <div className="bg-white rounded-xl border border-gray-200 p-5">
       <div className="flex items-start justify-between gap-3 mb-2">
         <div className="flex-1 min-w-0">
-          {patent.url ? (
-            <a
-              href={patent.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm font-semibold text-gray-800 hover:text-blue-600 transition-colors leading-snug"
-            >
-              {patent.title}
-            </a>
-          ) : (
-            <p className="text-sm font-semibold text-gray-800 leading-snug">{patent.title}</p>
-          )}
-          <p className="text-xs text-gray-400 mt-0.5">
-            {inventors && <span>{inventors} · </span>}
-            {patent.patent_number && <span>#{patent.patent_number} · </span>}
-            {patent.grant_date && (
-              <span>Granted {new Date(patent.grant_date).getFullYear()} · </span>
-            )}
-            <span>Patent</span>
-          </p>
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">Patent</span>
+            <RelevanceBadge category={patent.relevance_category} />
+            {patent.filing_date && <span className="text-xs text-gray-400">Filed {patent.filing_date}</span>}
+          </div>
+          <h3 className="text-sm font-semibold text-gray-800 leading-snug">
+            {patent.url ? (
+              <a href={patent.url} target="_blank" rel="noopener noreferrer" className="hover:text-[#3d74cc] hover:underline">
+                {patent.title}
+              </a>
+            ) : patent.title}
+          </h3>
+          <ScoreBar score={patent.relevance_score} />
         </div>
-        <RelevanceBadge category={patent.relevance_category} />
       </div>
 
-      <ScoreBar score={patent.relevance_score} />
+      {patent.inventors.length > 0 && (
+        <p className="text-xs text-gray-500 mb-2">
+          {patent.inventors.join(', ')}
+          {patent.assignee ? ` · ${patent.assignee}` : ''}
+        </p>
+      )}
+
+      {patent.patent_id && (
+        <p className="text-xs text-gray-400 mb-2">Patent {patent.patent_id}</p>
+      )}
 
       {patent.relevance_note && (
-        <p className="text-xs text-gray-600 mt-2 bg-gray-50 rounded-lg px-3 py-2 leading-relaxed border border-gray-100">
-          💡 {patent.relevance_note}
-        </p>
+        <div className="mt-2 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+          <p className="text-xs text-blue-700 leading-relaxed">💡 {patent.relevance_note}</p>
+        </div>
       )}
 
       {patent.abstract && (
         <div className="mt-2">
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-xs text-blue-500 hover:text-blue-700 transition-colors"
+            className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
           >
-            {expanded ? 'Hide abstract ↑' : 'Show abstract ↓'}
+            {expanded ? '▲ Hide abstract' : '▼ Show abstract'}
           </button>
           {expanded && (
-            <p className="text-xs text-gray-500 mt-1.5 leading-relaxed">{patent.abstract}</p>
+            <p className="mt-2 text-xs text-gray-600 leading-relaxed">{patent.abstract}</p>
           )}
         </div>
       )}
@@ -165,95 +159,90 @@ function PatentCard({ patent }: { patent: ResearchPatent }) {
 }
 
 export default function ResearchPapers({ papers, patents }: Props) {
-  const [filter, setFilter] = useState<FilterKey>('all')
+  const [filter, setFilter] = useState<Filter>('all')
 
-  const filteredPapers = filter === 'patents' ? [] : papers.filter((p) => {
-    if (filter === 'all')    return true
-    if (filter === 'unscored') return !p.relevance_category
+  const filteredPapers = papers.filter((p) => {
+    if (filter === 'patents')   return false
+    if (filter === 'unscored')  return !p.relevance_category
+    if (filter === 'all')       return p.relevance_category !== 'not_relevant'
     return p.relevance_category === filter
   })
 
-  const filteredPatents = filter === 'all' || filter === 'patents'
-    ? patents
-    : filter === 'unscored'
-    ? patents.filter(p => !p.relevance_category)
-    : patents.filter(p => p.relevance_category === filter)
+  const filteredPatents = patents.filter((p) => {
+    if (filter === 'unscored') return !p.relevance_category
+    if (filter === 'patents')  return true
+    if (filter === 'all')      return p.relevance_category !== 'not_relevant'
+    return p.relevance_category === filter
+  })
 
-  // Sort by relevance_score desc, nulls last
-  const sortedPapers  = [...filteredPapers].sort((a, b) =>
-    (b.relevance_score ?? -1) - (a.relevance_score ?? -1)
-  )
-  const sortedPatents = [...filteredPatents].sort((a, b) =>
-    (b.relevance_score ?? -1) - (a.relevance_score ?? -1)
-  )
+  const counts: Record<Filter, number> = {
+    all:              papers.filter((p) => p.relevance_category !== 'not_relevant').length + patents.filter((p) => p.relevance_category !== 'not_relevant').length,
+    core_to_company:  papers.filter((p) => p.relevance_category === 'core_to_company').length,
+    relevant_to_role: papers.filter((p) => p.relevance_category === 'relevant_to_role').length,
+    tangential:       papers.filter((p) => p.relevance_category === 'tangential').length,
+    patents:          patents.length,
+    unscored:         papers.filter((p) => !p.relevance_category).length + patents.filter((p) => !p.relevance_category).length,
+  }
 
-  const totalCount = papers.length + patents.length
-
-  if (!totalCount) {
+  if (papers.length === 0 && patents.length === 0) {
     return (
-      <div className="text-center py-16 text-gray-400">
-        <div className="text-4xl mb-3">🔬</div>
-        <p className="text-sm font-medium text-gray-600 mb-1">No research found yet</p>
-        <p className="text-xs text-gray-400">Run the research agent to search for papers and patents by the company&apos;s key people.</p>
+      <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-gray-400 text-sm">
+        No papers or patents found yet. Run research to discover academic work from the company&apos;s founders and executives.
       </div>
     )
   }
 
   return (
-    <div>
+    <div className="space-y-4">
       {/* Filter bar */}
-      <div className="flex gap-1.5 overflow-x-auto pb-2 mb-4">
-        {FILTERS.map((f) => {
-          const count = f.id === 'all'
-            ? totalCount
-            : f.id === 'patents'
-            ? patents.length
-            : f.id === 'unscored'
-            ? [...papers, ...patents].filter(p => !p.relevance_category).length
-            : [...papers, ...patents].filter(p => p.relevance_category === f.id).length
-
-          if (count === 0 && f.id !== 'all') return null
-
-          return (
-            <button
-              key={f.id}
-              onClick={() => setFilter(f.id)}
-              className={`flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-full whitespace-nowrap transition-colors border ${
-                filter === f.id
-                  ? 'bg-[#1a3a6b] text-white border-[#1a3a6b]'
-                  : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              {f.label}
-              <span className={`text-[10px] ${filter === f.id ? 'text-blue-200' : 'text-gray-400'}`}>
-                {count}
+      <div className="flex flex-wrap gap-2">
+        {FILTERS.map((f) => (
+          <button
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
+              filter === f.id
+                ? 'bg-[#3d74cc] text-white border-[#3d74cc]'
+                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+            }`}
+          >
+            {f.label}
+            {counts[f.id] > 0 && (
+              <span className={`ml-1 text-[10px] ${filter === f.id ? 'opacity-80' : 'text-gray-400'}`}>
+                {counts[f.id]}
               </span>
-            </button>
-          )
-        })}
+            )}
+          </button>
+        ))}
       </div>
 
       {/* Papers */}
-      {sortedPapers.length > 0 && (
-        <div className="space-y-3 mb-6">
+      {filteredPapers.length > 0 && (
+        <div className="space-y-3">
           {filter === 'all' && (
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-              Research Papers ({sortedPapers.length})
-            </p>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Research Papers</p>
           )}
-          {sortedPapers.map((p) => <PaperCard key={p.id} paper={p} />)}
+          {filteredPapers.map((paper) => (
+            <PaperCard key={paper.id} paper={paper} />
+          ))}
         </div>
       )}
 
       {/* Patents */}
-      {sortedPatents.length > 0 && (
+      {filteredPatents.length > 0 && (
         <div className="space-y-3">
-          {(filter === 'all' || filter === 'patents') && (
-            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-              Patents ({sortedPatents.length})
-            </p>
+          {filter === 'all' && (
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Patents</p>
           )}
-          {sortedPatents.map((p) => <PatentCard key={p.id} patent={p} />)}
+          {filteredPatents.map((patent) => (
+            <PatentCard key={patent.id} patent={patent} />
+          ))}
+        </div>
+      )}
+
+      {filteredPapers.length === 0 && filteredPatents.length === 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-gray-400 text-sm">
+          No items in this category.
         </div>
       )}
     </div>
