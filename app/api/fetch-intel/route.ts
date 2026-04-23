@@ -1,129 +1,23 @@
 /**
- * /api/fetch-intel
+ * /api/fetch-intel?job_id=<uuid>
  *
- * Server-side intel fetcher. Called on demand (or by a cron).
- * Currently fetches:
- *   1. Clockwork.io blog / sitemap
- *   2. Google News via SerpAPI (if SERP_API_KEY is set)
+ * Fetches news for a specific job using SerpAPI Google News.
+ * Requires authentication — verifies the job belongs to the requesting user.
  *
- * Uses the Supabase service-role key to bypass RLS when inserting
- * intel_items (shared feed — not user-specific).
- *
- * Extend this file to add more sources (LinkedIn scrape, RSS feeds, etc.)
+ * Uses the Supabase service-role key to bypass RLS when inserting intel_items.
  */
 
-import { NextResponse } from 'next/server'
-import { createClient }  from '@supabase/supabase-js'
+import { createServerClient, type CookieOptions } from '@supabase/ssr'
+import { cookies } from 'next/headers'
+import { NextResponse, type NextRequest } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
-// Service-role client bypasses RLS for shared intel_items inserts.
-// Falls back to publishable key for backward compat during initial setup.
+// Service-role client — bypasses RLS for intel_items inserts
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL         ?? '',
   process.env.SUPABASE_SERVICE_ROLE_KEY        ??
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
 )
-
-// ─── Clockwork blog fetcher ───────────────────────────────────────────────
-
-async function fetchClockworkBlog() {
-  const results: RawItem[] = []
-
-  try {
-    const res = await fetch('https://clockwork.io/blog', {
-      headers: { 'User-Agent': 'ClockworkResearchHub/1.0' },
-      next: { revalidate: 3600 },
-    })
-    if (!res.ok) return results
-
-    const html = await res.text()
-
-    // Extract <title> and <meta description> as a lightweight parse
-    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
-    const descMatch  = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i)
-
-    // Look for article links — adjust selectors as Clockwork's blog evolves
-    const articlePattern = /href=["'](\/blog\/[^"'?#]+)["'][^>]*>([^<]{10,120})/gi
-    let match: RegExpExecArray | null
-    const seen = new Set<string>()
-
-    while ((match = articlePattern.exec(html)) !== null) {
-      const path  = match[1]
-      const label = match[2].trim()
-      const url   = `https://clockwork.io${path}`
-      if (seen.has(url)) continue
-      seen.add(url)
-      results.push({
-        source:      'clockwork_blog',
-        item_type:   'article',
-        title:       label,
-        url,
-        summary:     null,
-        published_at: new Date().toISOString(),
-        tags:        ['clockwork', 'blog'],
-      })
-    }
-
-    // If no articles parsed, at least return the blog page itself
-    if (results.length === 0 && titleMatch) {
-      results.push({
-        source:       'clockwork_blog',
-        item_type:    'article',
-        title:        titleMatch[1].trim(),
-        url:          'https://clockwork.io/blog',
-        summary:      descMatch?.[1] ?? null,
-        published_at: new Date().toISOString(),
-        tags:         ['clockwork', 'blog'],
-      })
-    }
-  } catch (e) {
-    console.error('fetchClockworkBlog error:', e)
-  }
-
-  return results
-}
-
-// ─── Google News via SerpAPI ──────────────────────────────────────────────
-
-async function fetchGoogleNews(): Promise<RawItem[]> {
-  const apiKey = process.env.SERP_API_KEY
-  if (!apiKey) return []
-
-  const queries = [
-    'Clockwork Systems AI',
-    'Clockwork.io FleetIQ',
-    '"Suresh Vasudevan" Clockwork',
-    'GPU cluster networking AI fabric',
-  ]
-
-  const results: RawItem[] = []
-
-  for (const q of queries) {
-    try {
-      const url = `https://serpapi.com/search.json?engine=google_news&q=${encodeURIComponent(q)}&api_key=${apiKey}`
-      const res  = await fetch(url)
-      if (!res.ok) continue
-
-      const json = await res.json()
-      for (const article of json.news_results ?? []) {
-        results.push({
-          source:       'news',
-          item_type:    'article',
-          title:        article.title ?? 'Untitled',
-          url:          article.link ?? null,
-          summary:      article.snippet ?? null,
-          published_at: article.date ? new Date(article.date).toISOString() : new Date().toISOString(),
-          tags:         ['news', 'google'],
-        })
-      }
-    } catch (e) {
-      console.error(`fetchGoogleNews(${q}):`, e)
-    }
-  }
-
-  return results
-}
-
-// ─── Dedup + upsert into Supabase ────────────────────────────────────────
 
 type RawItem = {
   source: string
@@ -135,18 +29,73 @@ type RawItem = {
   tags: string[]
 }
 
-async function upsertItems(items: RawItem[]): Promise<number> {
+// ─── Google News via SerpAPI ──────────────────────────────────────────────
+
+async function fetchGoogleNewsForJob(
+  companyName: string,
+  roleTitle: string
+): Promise<RawItem[]> {
+  const apiKey = process.env.SERP_API_KEY
+  if (!apiKey) return []
+
+  const queries = [
+    `"${companyName}"`,
+    `"${companyName}" ${roleTitle}`,
+    `"${companyName}" funding news`,
+    `"${companyName}" product launch`,
+  ]
+
+  const results: RawItem[] = []
+  const seenUrls = new Set<string>()
+
+  for (const q of queries) {
+    try {
+      const url = `https://serpapi.com/search.json?engine=google_news&q=${encodeURIComponent(q)}&api_key=${apiKey}`
+      const res  = await fetch(url)
+      if (!res.ok) continue
+
+      const json = await res.json()
+      for (const article of json.news_results ?? []) {
+        const articleUrl = article.link ?? null
+        if (articleUrl && seenUrls.has(articleUrl)) continue
+        if (articleUrl) seenUrls.add(articleUrl)
+
+        results.push({
+          source:       'news',
+          item_type:    'article',
+          title:        article.title ?? 'Untitled',
+          url:          articleUrl,
+          summary:      article.snippet ?? null,
+          published_at: article.date
+            ? new Date(article.date).toISOString()
+            : new Date().toISOString(),
+          tags: ['news', companyName.toLowerCase().replace(/\s+/g, '-')],
+        })
+      }
+    } catch (e) {
+      console.error(`fetchGoogleNews(${q}):`, e)
+    }
+  }
+
+  return results
+}
+
+// ─── Dedup + upsert ───────────────────────────────────────────────────────
+
+async function upsertItems(items: RawItem[], jobId: string): Promise<number> {
   if (!items.length) return 0
 
-  // Fetch existing URLs to avoid duplicates
   const urls = items.map((i) => i.url).filter(Boolean)
   const { data: existing } = await supabaseAdmin
     .from('intel_items')
     .select('url')
+    .eq('job_id', jobId)
     .in('url', urls)
 
   const existingUrls = new Set((existing ?? []).map((r: { url: string }) => r.url))
-  const newItems = items.filter((i) => i.url && !existingUrls.has(i.url))
+  const newItems = items
+    .filter((i) => i.url && !existingUrls.has(i.url))
+    .map((i) => ({ ...i, job_id: jobId }))
 
   if (!newItems.length) return 0
 
@@ -157,24 +106,53 @@ async function upsertItems(items: RawItem[]): Promise<number> {
 
 // ─── Route handler ────────────────────────────────────────────────────────
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const [blogItems, newsItems] = await Promise.all([
-      fetchClockworkBlog(),
-      fetchGoogleNews(),
-    ])
+    const jobId = request.nextUrl.searchParams.get('job_id')
+    if (!jobId) {
+      return NextResponse.json({ ok: false, error: 'job_id required' }, { status: 400 })
+    }
 
-    const all = [...blogItems, ...newsItems]
-    const inserted = await upsertItems(all)
+    // Verify the requesting user owns this job
+    const cookieStore = await cookies()
+    const userSupabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+      {
+        cookies: {
+          getAll() { return cookieStore.getAll() },
+          setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            )
+          },
+        },
+      }
+    )
+
+    const { data: { user } } = await userSupabase.auth.getUser()
+    if (!user) {
+      return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const { data: job } = await supabaseAdmin
+      .from('jobs')
+      .select('company_name, role_title')
+      .eq('id', jobId)
+      .eq('user_id', user.id)
+      .single()
+
+    if (!job) {
+      return NextResponse.json({ ok: false, error: 'Job not found' }, { status: 404 })
+    }
+
+    const newsItems = await fetchGoogleNewsForJob(job.company_name, job.role_title)
+    const inserted  = await upsertItems(newsItems, jobId)
 
     return NextResponse.json({
       ok: true,
-      fetched: all.length,
+      fetched: newsItems.length,
       inserted,
-      sources: {
-        blog: blogItems.length,
-        news: newsItems.length,
-      },
     })
   } catch (err) {
     console.error('/api/fetch-intel error:', err)
