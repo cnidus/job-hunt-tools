@@ -7,8 +7,6 @@ export async function middleware(request: NextRequest) {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 
-  // If Supabase isn't configured yet, let the request through
-  // (avoids blocking the app during initial setup)
   if (!supabaseUrl || !supabaseKey) {
     return supabaseResponse
   }
@@ -48,6 +46,16 @@ export async function middleware(request: NextRequest) {
   if (!user && !isPublic) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
+    return NextResponse.redirect(url)
+  }
+
+  // Email allowlist — only permitted users can access the app
+  const ALLOWED_EMAILS = ['douglasyoud@gmail.com']
+  if (user && !ALLOWED_EMAILS.includes(user.email ?? '')) {
+    await supabase.auth.signOut()
+    const url = request.nextUrl.clone()
+    url.pathname = '/login'
+    url.searchParams.set('error', 'unauthorized')
     return NextResponse.redirect(url)
   }
 
