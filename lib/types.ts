@@ -1,7 +1,35 @@
+// ─── Job types ────────────────────────────────────────────────────────────
+
+export type JobStatus =
+  | 'saved'
+  | 'applied'
+  | 'interviewing'
+  | 'offered'
+  | 'rejected'
+  | 'withdrawn'
+
+export interface Job {
+  id: string
+  user_id: string
+  company_name: string
+  role_title: string
+  company_url: string | null
+  job_url: string | null
+  salary_min: number | null
+  salary_max: number | null
+  location: string | null
+  status: JobStatus
+  applied_at: string | null  // YYYY-MM-DD
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
 // ─── Database row types ───────────────────────────────────────────────────
 
 export type IntelSource =
-  | 'clockwork_blog'
+  | 'company_blog'
+  | 'clockwork_blog'   // legacy
   | 'news'
   | 'linkedin_manual'
   | 'webinar'
@@ -29,6 +57,7 @@ export type MasteryPriority = 'must' | 'high' | 'medium'
 
 export interface IntelItem {
   id: string
+  job_id: string | null
   source: IntelSource
   item_type: IntelType
   title: string
@@ -55,6 +84,7 @@ export interface DailyTask {
   id: string
   task_date: string      // YYYY-MM-DD
   user_id?: string
+  job_id?: string
   title: string
   detail: string | null
   category: TaskCategory
@@ -76,6 +106,7 @@ export interface MasteryCompletion {
   id: string
   user_id: string
   mastery_item_id: string
+  job_id: string | null
   completed_at: string
 }
 
@@ -84,6 +115,7 @@ export interface ResearchNote {
   created_at: string
   updated_at: string
   user_id?: string
+  job_id?: string
   title: string
   content: string
   tags: string[]
@@ -112,8 +144,29 @@ export function itemBadge(item: IntelItem): 'NEW' | 'UNREAD' | null {
   return isToday(item) ? 'NEW' : 'UNREAD'
 }
 
+// ─── Status display helpers ───────────────────────────────────────────────
+
+export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
+  saved:        'Saved',
+  applied:      'Applied',
+  interviewing: 'Interviewing',
+  offered:      'Offered',
+  rejected:     'Rejected',
+  withdrawn:    'Withdrawn',
+}
+
+export const JOB_STATUS_COLORS: Record<JobStatus, { bg: string; text: string; border: string }> = {
+  saved:        { bg: 'bg-gray-100',    text: 'text-gray-600',   border: 'border-gray-200' },
+  applied:      { bg: 'bg-blue-50',     text: 'text-blue-700',   border: 'border-blue-200' },
+  interviewing: { bg: 'bg-purple-50',   text: 'text-purple-700', border: 'border-purple-200' },
+  offered:      { bg: 'bg-green-50',    text: 'text-green-700',  border: 'border-green-200' },
+  rejected:     { bg: 'bg-red-50',      text: 'text-red-600',    border: 'border-red-200' },
+  withdrawn:    { bg: 'bg-gray-100',    text: 'text-gray-500',   border: 'border-gray-200' },
+}
+
 // Label map for source types
 export const SOURCE_LABELS: Record<IntelSource, string> = {
+  company_blog:    '📝 Blog',
   clockwork_blog:  '📝 Blog',
   news:            '📰 News',
   linkedin_manual: '💼 LinkedIn',
