@@ -364,3 +364,83 @@ export async function deleteNote(id: string): Promise<boolean> {
   if (error) { console.error('deleteNote:', error); return false }
   return true
 }
+
+// ─── Research jobs ────────────────────────────────────────────────────────────
+
+export async function fetchLatestResearchJob(jobId: string): Promise<import('./types').ResearchJob | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('research_jobs')
+    .select('*')
+    .eq('job_id', jobId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) { console.error('fetchLatestResearchJob:', error); return null }
+  return data as import('./types').ResearchJob | null
+}
+
+// ─── Company profile ──────────────────────────────────────────────────────────
+
+export async function fetchCompanyProfile(jobId: string): Promise<import('./types').CompanyProfile | null> {
+  if (!supabase) return null
+  const { data, error } = await supabase
+    .from('company_profiles')
+    .select('*')
+    .eq('job_id', jobId)
+    .maybeSingle()
+  if (error) { console.error('fetchCompanyProfile:', error); return null }
+  return data as import('./types').CompanyProfile | null
+}
+
+// ─── Company entities ─────────────────────────────────────────────────────────
+
+export async function fetchCompanyEntities(jobId: string): Promise<import('./types').CompanyEntity[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('company_entities')
+    .select('*')
+    .eq('job_id', jobId)
+    .order('created_at', { ascending: true })
+  if (error) { console.error('fetchCompanyEntities:', error); return [] }
+  return (data ?? []) as import('./types').CompanyEntity[]
+}
+
+// ─── Company investors ────────────────────────────────────────────────────────
+
+export async function fetchCompanyInvestors(jobId: string): Promise<import('./types').CompanyInvestor[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('company_investors')
+    .select('*')
+    .eq('job_id', jobId)
+    .order('lead_investor', { ascending: false })
+  if (error) { console.error('fetchCompanyInvestors:', error); return [] }
+  return (data ?? []) as import('./types').CompanyInvestor[]
+}
+
+// ─── Research papers ──────────────────────────────────────────────────────────
+
+export async function fetchResearchPapers(jobId: string): Promise<import('./types').ResearchPaper[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('research_papers')
+    .select('*')
+    .eq('job_id', jobId)
+    .order('relevance_score', { ascending: false, nullsFirst: false })
+  if (error) { console.error('fetchResearchPapers:', error); return [] }
+  return (data ?? []) as import('./types').ResearchPaper[]
+}
+
+// ─── Patents ──────────────────────────────────────────────────────────────────
+
+export async function fetchPatents(jobId: string): Promise<import('./types').ResearchPatent[]> {
+  if (!supabase) return []
+  const { data, error } = await supabase
+    .from('patents')
+    .select('*')
+    .eq('job_id', jobId)
+    .order('relevance_score', { ascending: false, nullsFirst: false })
+  if (error) { console.error('fetchPatents:', error); return [] }
+  return (data ?? []) as import('./types').ResearchPatent[]
+}
