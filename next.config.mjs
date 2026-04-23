@@ -1,7 +1,6 @@
-import type { NextConfig } from 'next'
-
-const nextConfig: NextConfig = {
-  // Allow fetching from Clockwork's domain for intel ingestion
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  // Prevent caching on API routes so intel fetches always return fresh data
   async headers() {
     return [
       {
