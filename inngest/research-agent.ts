@@ -673,7 +673,8 @@ export const researchAgent = inngest.createFunction(
     id:      'research-agent',
     retries: 2,
     onFailure: async ({ event, error }) => {
-      const { researchJobId } = event.data as { researchJobId: string }
+      const originalData = (event.data as unknown as { event?: { data?: { researchJobId?: string } } }).event?.data
+      const researchJobId = originalData?.researchJobId
       if (researchJobId) {
         await failResearchJob(researchJobId, String(error))
       }
