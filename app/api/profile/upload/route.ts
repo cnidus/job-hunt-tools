@@ -18,7 +18,10 @@ const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
 )
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' })
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+  defaultHeaders: { 'anthropic-beta': 'pdfs-2024-09-25' },
+})
 
 async function getUser() {
   const cookieStore = await cookies()
@@ -100,12 +103,19 @@ Return an empty array [] for any section with no data. Never return null for arr
     ]
   }
 
-  const response = await anthropic.messages.create({
-    model:      'claude-opus-4-6',
-    max_tokens: 4096,
-    system:     systemPrompt,
-    messages:   claudeMessages,
-  })
+  let response: Anthropic.Message
+  try {
+    response = await anthropic.messages.create({
+      model:      'claude-sonnet-4-6',
+      max_tokens: 4096,
+      system:     systemPrompt,
+      messages:   claudeMessages,
+    })
+  } catch (apiErr: unknown) {
+    const msg = apiErr instanceof Error ? apiErr.message : String(apiErr)
+    console.error('Anthropic API error:', msg)
+    return NextResponse.json({ error: `Claude API error: ${msg}` }, { status: 502 })
+  }
 
   const rawText = response.content
     .filter((b): b is Anthropic.TextBlock => b.type === 'text')
