@@ -192,7 +192,7 @@ export async function fetchCompanyIntelligence(
       addEntity(m[1], role, t, src)
     }
 
-    // "Name, Co-Founder and CTO" — profile card pattern
+    // "Name, Co-Founder and CTO" — comma-prefixed profile card
     const profileCard = new RegExp(
       `(${NAME}),\\s*(Co-?Founder(?:\\s+(?:and|&)\\s+(?:CEO|CTO|COO|CFO|Chief[^,\\.]{0,30}))?|CEO|CTO|COO|CFO)`,
       'gi'
@@ -204,6 +204,40 @@ export async function fetchCompanyIntelligence(
         /cto|chief tech/i.test(t) ? 'cto' : /ceo|chief exec/i.test(t) ? 'ceo' :
         /founder/i.test(t) ? 'founder' : 'vp'
       addEntity(m[1], role, t, src)
+    }
+
+    // Crunchbase/profile card: "Name Co-Founder & CTO ·" (no separator before title)
+    const crunchbaseCard = new RegExp(
+      `(${NAME})\\s+(Co-?Founder(?:\\s+(?:&|and)\\s+(?:CEO|CTO|COO|CFO|Chief\\w+))?|CEO|CTO|COO|CFO)\\s*[·\\n,.]`,
+      'gi'
+    )
+    for (const m of text.matchAll(crunchbaseCard)) {
+      if (!m[1] || !m[2]) continue
+      const t = m[2].trim()
+      const role: 'ceo'|'cto'|'founder'|'vp' =
+        /cto|chief tech/i.test(t) ? 'cto' : /ceo|chief exec/i.test(t) ? 'ceo' :
+        /founder/i.test(t) ? 'founder' : 'vp'
+      addEntity(m[1], role, t, src)
+    }
+
+    // "Name: Co-Founder" — colon separator (directory/profile pages)
+    const colonTitle = new RegExp(
+      `(${NAME}):\\s*(Co-?Founder(?:\\s+(?:and|&)\\s+(?:CEO|CTO|COO|CFO|Chief[^,.]{0,30}))?|CEO|CTO|COO|CFO|Chief[^,.]{0,30})`,
+      'gi'
+    )
+    for (const m of text.matchAll(colonTitle)) {
+      if (!m[1] || !m[2]) continue
+      const t = m[2].trim()
+      const role: 'ceo'|'cto'|'founder'|'vp' =
+        /cto|chief tech/i.test(t) ? 'cto' : /ceo|chief exec/i.test(t) ? 'ceo' :
+        /founder/i.test(t) ? 'founder' : 'vp'
+      addEntity(m[1], role, t, src)
+    }
+
+    // "Name is [the] co-founder [of Company]" — sentence-form detection
+    const isFounderRe = new RegExp(`(${NAME})\\s+is\\s+(?:the\\s+)?co-?founder`, 'gi')
+    for (const m of text.matchAll(isFounderRe)) {
+      if (m[1]) addEntity(m[1], 'founder', 'Co-Founder', src)
     }
   }
   const htmlToText = (html: string) =>
@@ -404,9 +438,13 @@ export async function fetchCompanyIntelligence(
   // ── 1e. SerpAPI news/funding snippets — no page fetch needed ────────────
   // Funding announcements name all co-founders. We use SerpAPI snippets directly
   // rather than fetching the full article pages (which are blocked by paywalls/bots).
+  // Strip legal suffixes for broader search coverage (e.g. "Clockwork Systems" vs "Clockwork Systems Inc")
+  const companyShort = companyName.replace(/\s*,?\s*(inc\.?|corp\.?|llc\.?|ltd\.?|co\.?)$/i, '').trim()
+
   for (const newsQ of [
     `"${companyName}" co-founders funding`,
     `"${companyName}" founder CEO CTO`,
+    `"${companyShort}" co-founders team`,  // broader — often surfaces less-known founders
   ]) {
     try {
       const newsRes = await fetch(
