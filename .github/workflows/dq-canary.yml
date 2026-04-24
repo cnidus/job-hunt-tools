@@ -34,6 +34,8 @@ jobs:
           SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
           # Optional — dramatically improves people coverage
           CRUNCHBASE_API_KEY: ${{ secrets.CRUNCHBASE_API_KEY }}
+          # NinjaPear/Nubela company details + funding API
+          NUBELA_API_KEY: ${{ secrets.NUBELA_API_KEY }}
         run: npm run canary
 
       - name: Annotate on failure

@@ -120,8 +120,9 @@ async function main() {
     console.log(`${GREEN}${BOLD}PASS${RESET} — all ${EXPECTED.length} expected people found (${found}/${EXPECTED.length})`)
   } else {
     console.log(`${RED}${BOLD}FAIL${RESET} — ${missing} of ${EXPECTED.length} expected people missing`)
-    console.log(`\nTip: The pipeline currently extracts people from SerpAPI organic results.`)
-    console.log(`     Adding CRUNCHBASE_API_KEY to env vars will improve coverage significantly.`)
+    console.log(`\nTip: The pipeline extracts people from SerpAPI + Nubela/NinjaPear.`)
+    console.log(`     Adding NUBELA_API_KEY improves coverage significantly (company/details endpoint).`)
+    console.log(`     Adding CRUNCHBASE_API_KEY also helps for alternative coverage.`)
   }
 
   // Extra entities not in expected list (bonus finds — good)

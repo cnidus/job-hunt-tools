@@ -177,6 +177,34 @@ export async function fetchCompanyIntelligence(
     for (const m of text.matchAll(ceoPre)) if (m[1]) addEntity(m[1], 'ceo', 'CEO', src)
     const ctoIs = new RegExp(`(${NAME})(?:\\s+is|,)\\s+(?:the\\s+)?(?:CTO|Chief Technology Officer)`, 'gi')
     for (const m of text.matchAll(ctoIs)) if (m[1]) addEntity(m[1], 'cto', 'CTO', src)
+
+    // "Name - Co-Founder at Company" or "Name | CEO, Company" — common in LinkedIn snippets
+    const linkedinCard = new RegExp(
+      `(${NAME})\\s*[-–|]\\s*(Co-?Founder|CEO|CTO|COO|CFO|Chief[^,\\.·]{0,30})(?:\\s+at\\s+|\\s*[,·]\\s*|\\s+@\\s+)`,
+      'gi'
+    )
+    for (const m of text.matchAll(linkedinCard)) {
+      if (!m[1] || !m[2]) continue
+      const t = m[2].trim()
+      const role: 'ceo'|'cto'|'founder'|'vp' =
+        /cto|chief tech/i.test(t) ? 'cto' : /ceo|chief exec/i.test(t) ? 'ceo' :
+        /founder/i.test(t) ? 'founder' : 'vp'
+      addEntity(m[1], role, t, src)
+    }
+
+    // "Name, Co-Founder and CTO" — profile card pattern
+    const profileCard = new RegExp(
+      `(${NAME}),\\s*(Co-?Founder(?:\\s+(?:and|&)\\s+(?:CEO|CTO|COO|CFO|Chief[^,\\.]{0,30}))?|CEO|CTO|COO|CFO)`,
+      'gi'
+    )
+    for (const m of text.matchAll(profileCard)) {
+      if (!m[1] || !m[2]) continue
+      const t = m[2].trim()
+      const role: 'ceo'|'cto'|'founder'|'vp' =
+        /cto|chief tech/i.test(t) ? 'cto' : /ceo|chief exec/i.test(t) ? 'ceo' :
+        /founder/i.test(t) ? 'founder' : 'vp'
+      addEntity(m[1], role, t, src)
+    }
   }
   const htmlToText = (html: string) =>
     html.replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -275,92 +303,155 @@ export async function fetchCompanyIntelligence(
     }
   }
 
-  // ── 1d. Fetch company About/Team page ─────────────────────────────────────
-  // The company's own website is the most authoritative source for leadership.
-  // Try common team-page paths and extract names from the full HTML text.
-  if (result.website) {
-    const base = result.website.replace(/\/$/, '')
-    const teamPaths = ['/about', '/team', '/leadership', '/company', '/about-us', '/our-team']
+  // ── 1c-ii. Nubela / NinjaPear — company details + funding ───────────────
+  // company/details returns executives[]{name, title} — most reliable people source.
+  // company/funding returns investors + total raised.
+  // Both cost credits; skip gracefully if key absent or balance too low.
+  if (process.env.NUBELA_API_KEY) {
+    const nubelaKey = process.env.NUBELA_API_KEY
+    // Strip protocol — Nubela accepts bare hostname
+    const nubelaHost = (result.website ?? '').replace(/^https?:\/\//, '').replace(/\/$/, '')
 
-    for (const path of teamPaths) {
+    if (nubelaHost) {
+      // Company details (includes executives)
       try {
-        const res = await fetch(base + path, {
-          signal: AbortSignal.timeout(6000),
-          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JobTracker/1.0; research bot)' },
-        })
-        if (!res.ok) continue
-        const text = htmlToText(await res.text())
-        extractPeopleFromText(text, 'website_team')
-        // Also extract "Name\n(newline)Title" card patterns common on About pages
-        const NAME_PAT = '[A-Z][a-z]+(?:\\s[A-Z][a-z]+)+'
-        const cardRe = new RegExp(
-          `(${NAME_PAT})\\s+(?:—|-|\\|)?\\s*(CEO|CTO|COO|CFO|VP|Co-?Founder|Founder|Chief[^,\\.]{0,40})`,
-          'g'
+        const detRes = await fetch(
+          `https://nubela.co/api/v1/company/details?website=${encodeURIComponent(nubelaHost)}`,
+          { headers: { Authorization: `Bearer ${nubelaKey}` } }
         )
-        for (const m of text.matchAll(cardRe)) {
-          if (!m[1] || !m[2]) continue
-          const t = m[2].trim()
-          const role: 'ceo'|'cto'|'founder'|'vp' =
-            /cto|chief tech/i.test(t) ? 'cto' :
-            /ceo|chief exec/i.test(t) ? 'ceo' :
-            /founder/i.test(t) ? 'founder' : 'vp'
-          addEntity(m[1], role, t, 'website_team')
+        if (detRes.ok) {
+          const det = await detRes.json()
+          if (!det.error) {
+            if (!result.description    && det.tagline)          result.description    = det.tagline
+            if (!result.founded_year   && det.founded_year)     result.founded_year   = det.founded_year
+            if (!result.employee_count && det.employee_count)   result.employee_count = String(det.employee_count)
+            if (!result.hq_location    && det.addresses?.length) {
+              const addr = det.addresses[0]
+              result.hq_location = [addr.city, addr.state, addr.country].filter(Boolean).join(', ')
+            }
+            for (const exec of (det.executives ?? [])) {
+              if (!exec.name) continue
+              const t: string = exec.title ?? ''
+              const role: 'ceo'|'cto'|'founder'|'vp' =
+                /cto|chief tech/i.test(t)  ? 'cto'     :
+                /ceo|chief exec/i.test(t)  ? 'ceo'     :
+                /founder/i.test(t)         ? 'founder'  : 'vp'
+              addEntity(exec.name, role, t || null, 'nubela_details')
+            }
+          }
         }
-        if (result.entities.length >= 4) break
-      } catch { /* timeout or 404 — try next path */ }
+      } catch (e) {
+        console.error('fetchCompanyIntelligence:nubela_details', e)
+      }
+
+      // Funding rounds
+      try {
+        const funRes = await fetch(
+          `https://nubela.co/api/v1/company/funding?website=${encodeURIComponent(nubelaHost)}`,
+          { headers: { Authorization: `Bearer ${nubelaKey}` } }
+        )
+        if (funRes.ok) {
+          const fun = await funRes.json()
+          if (!fun.error && fun.funding_rounds?.length) {
+            if (!result.funding_total && fun.total_funds_raised_usd)
+              result.funding_total = Math.round(fun.total_funds_raised_usd / 1_000_000)
+            const latest = fun.funding_rounds[0]
+            if (!result.funding_stage && latest?.round_type)
+              result.funding_stage = latest.round_type.replace(/_/g, ' ')
+            for (const round of fun.funding_rounds) {
+              for (const inv of (round.investors ?? [])) {
+                if (!inv.name) continue
+                if (!result.investors.find((i) => i.name === inv.name)) {
+                  result.investors.push({
+                    name: inv.name,
+                    stage: round.round_type?.replace(/_/g, ' ') ?? null,
+                    amount_usd: round.amount_usd ? Math.round(round.amount_usd / 1_000_000) : null,
+                    source: 'nubela_funding',
+                  })
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error('fetchCompanyIntelligence:nubela_funding', e)
+      }
     }
   }
 
-  // ── 1e. Fetch funding articles (TechCrunch, VentureBeat, etc.) ───────────
-  // Funding announcements always name all co-founders in the first few paragraphs.
-  try {
-    const newsQ = `"${companyName}" funding founders site:techcrunch.com OR site:venturebeat.com OR site:forbes.com OR site:businesswire.com`
-    const newsRes = await fetch(
-      `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(newsQ)}&num=3&api_key=${serpKey}`
-    )
-    if (newsRes.ok) {
+  // ── 1d. SerpAPI site-specific search for team/about pages ───────────────
+  // Direct HTTP fetches of company websites often fail (JS SPAs, bot blocking).
+  // Instead, query Google via SerpAPI with site: restriction — Google's crawler
+  // has already rendered and indexed JS-rendered pages.
+  if (result.website) {
+    try {
+      const hostname = new URL(result.website).hostname
+      const siteQ = `site:${hostname} team OR about OR leadership`
+      const siteRes = await fetch(
+        `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(siteQ)}&num=5&api_key=${serpKey}`
+      )
+      if (siteRes.ok) {
+        const siteJson = await siteRes.json()
+        for (const item of (siteJson.organic_results ?? []).slice(0, 5)) {
+          extractPeopleFromText([item.title, item.snippet].filter(Boolean).join(' · '), 'serp_site_team')
+        }
+      }
+    } catch (e) {
+      console.error('fetchCompanyIntelligence:serp_site_team', e)
+    }
+  }
+
+  // ── 1e. SerpAPI news/funding snippets — no page fetch needed ────────────
+  // Funding announcements name all co-founders. We use SerpAPI snippets directly
+  // rather than fetching the full article pages (which are blocked by paywalls/bots).
+  for (const newsQ of [
+    `"${companyName}" co-founders funding`,
+    `"${companyName}" founder CEO CTO`,
+  ]) {
+    try {
+      const newsRes = await fetch(
+        `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(newsQ)}&num=8&api_key=${serpKey}`
+      )
+      if (!newsRes.ok) continue
       const newsJson = await newsRes.json()
-      for (const item of (newsJson.organic_results ?? []).slice(0, 3)) {
-        if (!item.link) continue
-        try {
-          const pageRes = await fetch(item.link, {
-            signal: AbortSignal.timeout(6000),
-            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JobTracker/1.0; research bot)' },
-          })
-          if (!pageRes.ok) continue
-          const html = await pageRes.text()
-          const text = html
-            .replace(/<script[\s\S]*?<\/script>/gi, '')
-            .replace(/<style[\s\S]*?<\/style>/gi, '')
-            .replace(/<[^>]+>/g, ' ')
-            .replace(/\s+/g, ' ')
-          // Focus on first 5000 chars — founders are named in the lede
-          extractPeopleFromText(text.slice(0, 5000), 'news_article')
-        } catch { /* timeout — skip this article */ }
+      for (const item of (newsJson.organic_results ?? []).slice(0, 8)) {
+        extractPeopleFromText([item.title, item.snippet].filter(Boolean).join(' · '), 'serp_news')
+      }
+      for (const qa of newsJson.related_questions ?? []) {
+        extractPeopleFromText([qa.question, qa.snippet, qa.answer].filter(Boolean).join(' '), 'serp_news_rq')
+      }
+      // Also check KG returned by this query
+      const kg2 = newsJson.knowledge_graph
+      if (kg2?.title && strip(kg2.title).includes(companyCore)) {
+        for (const p of kg2.profiles ?? []) {
+          const t: string = p.title ?? ''
+          const role: 'ceo'|'cto'|'founder'|'vp' =
+            /cto|chief tech/i.test(t) ? 'cto' : /ceo|chief exec/i.test(t) ? 'ceo' :
+            /founder/i.test(t) ? 'founder' : 'vp'
+          if (p.name) addEntity(p.name, role, t || null, 'serp_kg2')
+        }
+      }
+    } catch (e) {
+      console.error(`fetchCompanyIntelligence:serp_news(${newsQ}):`, e)
+    }
+  }
+
+  // ── 1f. LinkedIn people search via SerpAPI ───────────────────────────────
+  // LinkedIn profiles often have "Name - Co-Founder at Company" in the title/snippet.
+  // SerpAPI can search site:linkedin.com/in without triggering LinkedIn's bot blocking.
+  try {
+    const liQ = `site:linkedin.com/in "${companyName}" co-founder OR founder OR CEO OR CTO`
+    const liRes = await fetch(
+      `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(liQ)}&num=8&api_key=${serpKey}`
+    )
+    if (liRes.ok) {
+      const liJson = await liRes.json()
+      for (const item of (liJson.organic_results ?? []).slice(0, 8)) {
+        extractPeopleFromText([item.title, item.snippet].filter(Boolean).join(' · '), 'serp_linkedin')
       }
     }
   } catch (e) {
-    console.error('fetchCompanyIntelligence:news_articles', e)
-  }
-
-  // ── 1f. Company website homepage as last resort ───────────────────────────
-  // Some companies list founders/leadership on their homepage or /index.
-  if (result.website && result.entities.length < 3) {
-    try {
-      const res = await fetch(result.website, {
-        signal: AbortSignal.timeout(6000),
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JobTracker/1.0; research bot)' },
-      })
-      if (res.ok) {
-        const html = await res.text()
-        const text = html
-          .replace(/<script[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[\s\S]*?<\/style>/gi, '')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ')
-        extractPeopleFromText(text, 'website_home')
-      }
-    } catch { /* skip */ }
+    console.error('fetchCompanyIntelligence:serp_linkedin', e)
   }
 
   return result
