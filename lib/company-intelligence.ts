@@ -120,56 +120,53 @@ export async function fetchCompanyIntelligence(
     console.error('fetchCompanyIntelligence:serp', e)
   }
 
+  // ── Shared helpers (used by all people-extraction phases below) ─────────────
+  const NAME = '[A-Z][a-z]+(?:\\s[A-Z][a-z]+)+'
+  const STOPWORDS = new Set(['and','of','the','said','by','is','was','in','at','for',
+                             'from','with','to','a','an','as','or','on','its','their'])
+  const isValidName = (name: string): boolean => {
+    const parts = name.trim().split(/\s+/)
+    if (parts.length < 2 || parts.length > 3) return false
+    if (!parts.every((p) => /^[A-Z][a-z]{1,}$/.test(p))) return false
+    if (parts.some((p) => STOPWORDS.has(p.toLowerCase()))) return false
+    return true
+  }
+  const addEntity = (name: string, role: 'ceo'|'cto'|'founder'|'vp', titleStr: string|null, src: string) => {
+    const n = name.trim()
+    if (!isValidName(n)) return
+    if (n.toLowerCase().includes(companyCore.split(' ')[0])) return
+    if (result.entities.find((e) => e.name.toLowerCase() === n.toLowerCase())) return
+    result.entities.push({ name: n, role, title: titleStr, linkedin_url: null, source: src })
+    if (role === 'ceo' && !result.ceo_name) result.ceo_name = n
+  }
+  const extractPeopleFromText = (text: string, src: string) => {
+    const coFoundedBy = new RegExp(`co-?founded\\s+by\\s+(${NAME})(?:,\\s*(${NAME}))?(?:,?\\s+and\\s+(${NAME}))?`, 'gi')
+    for (const m of text.matchAll(coFoundedBy)) {
+      [m[1], m[2], m[3]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Co-Founder', src))
+    }
+    const coFounders = new RegExp(`co-?founders?[:\\s]+(${NAME})(?:[,\\s]+(?:and\\s+)?(${NAME}))?(?:[,\\s]+(?:and\\s+)?(${NAME}))?`, 'gi')
+    for (const m of text.matchAll(coFounders)) {
+      [m[1], m[2], m[3]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Co-Founder', src))
+    }
+    const foundedBy = new RegExp(`(?<!co-)founded\\s+by\\s+(${NAME})(?:\\s+and\\s+(${NAME}))?`, 'gi')
+    for (const m of text.matchAll(foundedBy)) {
+      [m[1], m[2]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Founder', src))
+    }
+    const ceoIs = new RegExp(`(${NAME})(?:\\s+is|,)\\s+(?:the\\s+)?(?:CEO|Chief Executive Officer)`, 'gi')
+    for (const m of text.matchAll(ceoIs)) if (m[1]) addEntity(m[1], 'ceo', 'CEO', src)
+    const ceoPre = new RegExp(`(?:CEO|Chief Executive Officer)\\s+(?:is\\s+)?(${NAME})`, 'gi')
+    for (const m of text.matchAll(ceoPre)) if (m[1]) addEntity(m[1], 'ceo', 'CEO', src)
+    const ctoIs = new RegExp(`(${NAME})(?:\\s+is|,)\\s+(?:the\\s+)?(?:CTO|Chief Technology Officer)`, 'gi')
+    for (const m of text.matchAll(ctoIs)) if (m[1]) addEntity(m[1], 'cto', 'CTO', src)
+  }
+  const htmlToText = (html: string) =>
+    html.replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ').trim()
+
   // ── 1a-ii. Leadership team search (always runs, finds multiple people) ──────
-  {
-    const NAME = '[A-Z][a-z]+(?:\\s[A-Z][a-z]+)+'
-
-    const STOPWORDS = new Set(['and','of','the','said','by','is','was','in','at','for',
-                               'from','with','to','a','an','as','or','on','its','their'])
-    const isValidName = (name: string): boolean => {
-      const parts = name.trim().split(/\s+/)
-      if (parts.length < 2 || parts.length > 3) return false
-      if (!parts.every((p) => /^[A-Z][a-z]{1,}$/.test(p))) return false
-      if (parts.some((p) => STOPWORDS.has(p.toLowerCase()))) return false
-      return true
-    }
-
-    const addEntity = (name: string, role: 'ceo' | 'cto' | 'founder' | 'vp', titleStr: string | null, src: string) => {
-      const n = name.trim()
-      if (!isValidName(n)) return
-      if (n.toLowerCase().includes(companyCore.split(' ')[0])) return
-      if (result.entities.find((e) => e.name.toLowerCase() === n.toLowerCase())) return
-      result.entities.push({ name: n, role, title: titleStr, linkedin_url: null, source: src })
-      if (role === 'ceo' && !result.ceo_name) result.ceo_name = n
-    }
-
-    const extractPeopleFromText = (text: string, src: string) => {
-      const coFoundedBy = new RegExp(`co-?founded\\s+by\\s+(${NAME})(?:,\\s*(${NAME}))?(?:,?\\s+and\\s+(${NAME}))?`, 'gi')
-      for (const m of text.matchAll(coFoundedBy)) {
-        [m[1], m[2], m[3]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Co-Founder', src))
-      }
-
-      const coFounders = new RegExp(`co-?founders?[:\\s]+(${NAME})(?:[,\\s]+(?:and\\s+)?(${NAME}))?(?:[,\\s]+(?:and\\s+)?(${NAME}))?`, 'gi')
-      for (const m of text.matchAll(coFounders)) {
-        [m[1], m[2], m[3]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Co-Founder', src))
-      }
-
-      const foundedBy = new RegExp(`(?<!co-)founded\\s+by\\s+(${NAME})(?:\\s+and\\s+(${NAME}))?`, 'gi')
-      for (const m of text.matchAll(foundedBy)) {
-        [m[1], m[2]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Founder', src))
-      }
-
-      const ceoIs = new RegExp(`(${NAME})(?:\\s+is|,)\\s+(?:the\\s+)?(?:CEO|Chief Executive Officer)`, 'gi')
-      for (const m of text.matchAll(ceoIs)) if (m[1]) addEntity(m[1], 'ceo', 'CEO', src)
-
-      const ceoPre = new RegExp(`(?:CEO|Chief Executive Officer)\\s+(?:is\\s+)?(${NAME})`, 'gi')
-      for (const m of text.matchAll(ceoPre)) if (m[1]) addEntity(m[1], 'ceo', 'CEO', src)
-
-      const ctoIs = new RegExp(`(${NAME})(?:\\s+is|,)\\s+(?:the\\s+)?(?:CTO|Chief Technology Officer)`, 'gi')
-      for (const m of text.matchAll(ctoIs)) if (m[1]) addEntity(m[1], 'cto', 'CTO', src)
-    }
-
-    for (const q of [`"${companyName}" co-founders leadership`, `"${companyName}" CEO founder`]) {
+  for (const q of [`"${companyName}" co-founders leadership`, `"${companyName}" CEO founder`]) {
       try {
         const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&num=8&api_key=${serpKey}`
         const res = await fetch(url)
@@ -196,7 +193,6 @@ export async function fetchCompanyIntelligence(
         console.error(`fetchCompanyIntelligence:serp_team(${q}):`, e)
       }
     }
-  }
 
   // ── 1b. Wikipedia REST API — description supplement ──────────────────────
   if (!result.description) {
@@ -258,6 +254,94 @@ export async function fetchCompanyIntelligence(
     } catch (e) {
       console.error('fetchCompanyIntelligence:crunchbase', e)
     }
+  }
+
+  // ── 1d. Fetch company About/Team page ─────────────────────────────────────
+  // The company's own website is the most authoritative source for leadership.
+  // Try common team-page paths and extract names from the full HTML text.
+  if (result.website) {
+    const base = result.website.replace(/\/$/, '')
+    const teamPaths = ['/about', '/team', '/leadership', '/company', '/about-us', '/our-team']
+
+    for (const path of teamPaths) {
+      try {
+        const res = await fetch(base + path, {
+          signal: AbortSignal.timeout(6000),
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JobTracker/1.0; research bot)' },
+        })
+        if (!res.ok) continue
+        const text = htmlToText(await res.text())
+        extractPeopleFromText(text, 'website_team')
+        // Also extract "Name\n(newline)Title" card patterns common on About pages
+        const NAME_PAT = '[A-Z][a-z]+(?:\\s[A-Z][a-z]+)+'
+        const cardRe = new RegExp(
+          `(${NAME_PAT})\\s+(?:—|-|\\|)?\\s*(CEO|CTO|COO|CFO|VP|Co-?Founder|Founder|Chief[^,\\.]{0,40})`,
+          'g'
+        )
+        for (const m of text.matchAll(cardRe)) {
+          if (!m[1] || !m[2]) continue
+          const t = m[2].trim()
+          const role: 'ceo'|'cto'|'founder'|'vp' =
+            /cto|chief tech/i.test(t) ? 'cto' :
+            /ceo|chief exec/i.test(t) ? 'ceo' :
+            /founder/i.test(t) ? 'founder' : 'vp'
+          addEntity(m[1], role, t, 'website_team')
+        }
+        if (result.entities.length >= 4) break
+      } catch { /* timeout or 404 — try next path */ }
+    }
+  }
+
+  // ── 1e. Fetch funding articles (TechCrunch, VentureBeat, etc.) ───────────
+  // Funding announcements always name all co-founders in the first few paragraphs.
+  try {
+    const newsQ = `"${companyName}" funding founders site:techcrunch.com OR site:venturebeat.com OR site:forbes.com OR site:businesswire.com`
+    const newsRes = await fetch(
+      `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(newsQ)}&num=3&api_key=${serpKey}`
+    )
+    if (newsRes.ok) {
+      const newsJson = await newsRes.json()
+      for (const item of (newsJson.organic_results ?? []).slice(0, 3)) {
+        if (!item.link) continue
+        try {
+          const pageRes = await fetch(item.link, {
+            signal: AbortSignal.timeout(6000),
+            headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JobTracker/1.0; research bot)' },
+          })
+          if (!pageRes.ok) continue
+          const html = await pageRes.text()
+          const text = html
+            .replace(/<script[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[\s\S]*?<\/style>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+          // Focus on first 5000 chars — founders are named in the lede
+          extractPeopleFromText(text.slice(0, 5000), 'news_article')
+        } catch { /* timeout — skip this article */ }
+      }
+    }
+  } catch (e) {
+    console.error('fetchCompanyIntelligence:news_articles', e)
+  }
+
+  // ── 1f. Company website homepage as last resort ───────────────────────────
+  // Some companies list founders/leadership on their homepage or /index.
+  if (result.website && result.entities.length < 3) {
+    try {
+      const res = await fetch(result.website, {
+        signal: AbortSignal.timeout(6000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JobTracker/1.0; research bot)' },
+      })
+      if (res.ok) {
+        const html = await res.text()
+        const text = html
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+        extractPeopleFromText(text, 'website_home')
+      }
+    } catch { /* skip */ }
   }
 
   return result
