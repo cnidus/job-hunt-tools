@@ -81,7 +81,7 @@ export default function ProfileSetup({ initialProfile }: Props) {
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800"
         >
-          How to export your LinkedIn profile as PDF →
+          How to export your LinkedIn profile as PDF {'→'}
         </a>
       </div>
 
