@@ -110,50 +110,27 @@ async function fetchCompanyIntelligence(
     if (res.ok) {
       const json = await res.json()
 
-      // Knowledge Graph panel (returned for established companies)
+      // Knowledge Graph panel — use for factual company data only (not CEO/people).
+      // KG validation: the KG title must CONTAIN the company core name (strip TLD + legal suffixes).
+      // This prevents e.g. "Clockwork" KG (an IT firm) from poisoning "Clockwork Systems Inc" results,
+      // because "clockwork" does NOT contain "clockwork systems".
       const kg = json.knowledge_graph
-      // Guard: only trust the KG if its title actually references our company name.
-      // SerpAPI can return a KG for a different company with a similar name (e.g. "Clockwork"
-      // the IT firm vs "Clockwork.io" the startup). Strip TLD for matching.
-      const companyCoreName = companyName.replace(/\.[a-z]{2,}$/i, '').toLowerCase()
-      const kgTitle = (kg?.title ?? kg?.name ?? '').toLowerCase()
-      const kgIsValid = !kg || companyCoreName.split(/\s+/).some(
-        (word: string) => word.length > 2 && kgTitle.includes(word)
-      )
+      const strip = (s: string) =>
+        s.replace(/\.[a-z]{2,}$/i, '')           // remove TLD (.io, .ai, .com)
+         .replace(/\b(inc|corp|llc|ltd|co\.?)\b/gi, '')
+         .replace(/\s+/g, ' ').trim().toLowerCase()
+      const companyCore = strip(companyName)
+      const kgCore      = strip(kg?.title ?? kg?.name ?? '')
+      // KG is valid only if its core title contains our full company core name
+      const kgIsValid = kgCore.includes(companyCore)
       if (kg && kgIsValid) {
         result.description    = kg.description ?? result.description
         result.hq_location    = kg.headquarters ?? kg.location ?? result.hq_location
         result.website        = kg.website ?? result.website
         result.employee_count = kg.employees?.toString() ?? result.employee_count
         result.founded_year   = kg.founded ? parseInt(String(kg.founded)) : result.founded_year
-
-        // CEO from knowledge_graph.profiles or people table
-        const ceoEntry = (kg.profiles ?? []).find((p: { name?: string; title?: string }) =>
-          /ceo|chief executive/i.test(p.title ?? '')
-        )
-        if (ceoEntry?.name) {
-          result.ceo_name = ceoEntry.name
-          result.entities.push({
-            name: ceoEntry.name, role: 'ceo',
-            title: ceoEntry.title ?? 'CEO',
-            linkedin_url: null, source: 'serp_kg',
-          })
-        }
-
-        // Founders listed in KG
-        const founders: string[] = []
-        if (kg.founders) {
-          const raw = Array.isArray(kg.founders) ? kg.founders : [kg.founders]
-          for (const f of raw) {
-            const name = typeof f === 'string' ? f : f.name
-            if (name && !founders.includes(name)) founders.push(name)
-          }
-        }
-        for (const name of founders) {
-          if (!result.entities.find((e) => e.name === name)) {
-            result.entities.push({ name, role: 'founder', title: 'Co-Founder', linkedin_url: null, source: 'serp_kg' })
-          }
-        }
+        // NOTE: intentionally NOT extracting CEO/founders from KG — too unreliable for
+        // small companies. CEO is sourced via dedicated organic search below.
       }
 
       // Related Questions — extract funding/founder/CEO facts from snippets
@@ -220,6 +197,58 @@ async function fetchCompanyIntelligence(
     }
   } catch (e) {
     console.error('fetchCompanyIntelligence:serp', e)
+  }
+
+  // ── 1a-ii. Dedicated CEO/founder search — avoids KG mis-attribution ──────
+  // Run a targeted query so we get the ACTUAL leadership of this specific company.
+  if (!result.ceo_name) {
+    try {
+      const ceoQuery = `"${companyName}" CEO OR founder`
+      const ceoUrl = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(ceoQuery)}&num=5&api_key=${serpKey}`
+      const ceoRes = await fetch(ceoUrl)
+      if (ceoRes.ok) {
+        const ceoJson = await ceoRes.json()
+        // Try knowledge_graph people first (if a KG returns for this exact query)
+        const ceoKg = ceoJson.knowledge_graph
+        if (ceoKg?.title && strip(ceoKg.title).includes(companyCore)) {
+          const ceoEntry = (ceoKg.profiles ?? []).find((p: { name?: string; title?: string }) =>
+            /ceo|chief executive|founder/i.test(p.title ?? '')
+          )
+          if (ceoEntry?.name) {
+            result.ceo_name = ceoEntry.name
+            result.entities.push({ name: ceoEntry.name, role: 'ceo', title: ceoEntry.title ?? 'CEO', linkedin_url: null, source: 'serp_kg_ceo' })
+          }
+        }
+        // Fallback: parse "Name is the CEO/founder of Company" patterns from snippets
+        if (!result.ceo_name) {
+          for (const org of (ceoJson.organic_results ?? []).slice(0, 5)) {
+            const snippet: string = (org.snippet ?? org.title ?? '').replace(/\n/g, ' ')
+            // Patterns: "Name is CEO" / "CEO Name" / "founded by Name"
+            const patterns = [
+              /([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)(?:\s+is|,)\s+(?:the\s+)?(?:CEO|Chief Executive|founder|co-founder)/i,
+              /(?:CEO|Chief Executive|founder|co-founder)\s+(?:is\s+)?([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i,
+              /founded\s+by\s+([A-Z][a-z]+ [A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i,
+            ]
+            for (const pattern of patterns) {
+              const m = snippet.match(pattern)
+              if (m?.[1]) {
+                const name = m[1].trim()
+                // Sanity-check: name shouldn't be the company name itself
+                if (!name.toLowerCase().includes(companyCore.split(' ')[0])) {
+                  const role = /founder|co-founder/i.test(m[0]) ? 'founder' : 'ceo'
+                  result.ceo_name = name
+                  result.entities.push({ name, role, title: role === 'founder' ? 'Founder' : 'CEO', linkedin_url: null, source: 'serp_organic' })
+                  break
+                }
+              }
+            }
+            if (result.ceo_name) break
+          }
+        }
+      }
+    } catch (e) {
+      console.error('fetchCompanyIntelligence:serp_ceo', e)
+    }
   }
 
   // ── 1b. Wikipedia REST API — description supplement ──────────────────────
