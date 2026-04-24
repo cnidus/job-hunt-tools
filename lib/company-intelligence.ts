@@ -145,16 +145,19 @@ export async function fetchCompanyIntelligence(
 
     const extractPeopleFromText = (text: string, src: string) => {
       const coFoundedBy = new RegExp(`co-?founded\\s+by\\s+(${NAME})(?:,\\s*(${NAME}))?(?:,?\\s+and\\s+(${NAME}))?`, 'gi')
-      for (const m of text.matchAll(coFoundedBy))
-        ;[m[1], m[2], m[3]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Co-Founder', src))
+      for (const m of text.matchAll(coFoundedBy)) {
+        [m[1], m[2], m[3]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Co-Founder', src))
+      }
 
       const coFounders = new RegExp(`co-?founders?[:\\s]+(${NAME})(?:[,\\s]+(?:and\\s+)?(${NAME}))?(?:[,\\s]+(?:and\\s+)?(${NAME}))?`, 'gi')
-      for (const m of text.matchAll(coFounders))
-        ;[m[1], m[2], m[3]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Co-Founder', src))
+      for (const m of text.matchAll(coFounders)) {
+        [m[1], m[2], m[3]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Co-Founder', src))
+      }
 
       const foundedBy = new RegExp(`(?<!co-)founded\\s+by\\s+(${NAME})(?:\\s+and\\s+(${NAME}))?`, 'gi')
-      for (const m of text.matchAll(foundedBy))
-        ;[m[1], m[2]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Founder', src))
+      for (const m of text.matchAll(foundedBy)) {
+        [m[1], m[2]].filter(Boolean).forEach((n) => addEntity(n!, 'founder', 'Founder', src))
+      }
 
       const ceoIs = new RegExp(`(${NAME})(?:\\s+is|,)\\s+(?:the\\s+)?(?:CEO|Chief Executive Officer)`, 'gi')
       for (const m of text.matchAll(ceoIs)) if (m[1]) addEntity(m[1], 'ceo', 'CEO', src)
