@@ -67,8 +67,9 @@ function warn(msg: string) { console.log(`  ${YELLOW}~${RESET} ${msg}`) }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  // Dynamic import here (not top-level) so dotenv runs first
-  const { fetchCompanyIntelligence } = await import('../inngest/research-agent')
+  // Dynamic import here (not top-level) so dotenv runs first.
+  // Imports from lib/company-intelligence — no Inngest/Supabase/Anthropic deps.
+  const { fetchCompanyIntelligence } = await import('../lib/company-intelligence')
 
   console.log(`\n${BOLD}DQ Canary — ${COMPANY}${RESET}`)
   console.log('─'.repeat(50))
