@@ -105,14 +105,22 @@ async function fetchCompanyIntelligence(
 
   // ── 1a. SerpAPI Google search — Knowledge Graph + Related Questions ──────
   try {
-    const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(companyName + ' company')}&api_key=${serpKey}`
+    const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent('"' + companyName + '" company')}&api_key=${serpKey}`
     const res  = await fetch(url)
     if (res.ok) {
       const json = await res.json()
 
       // Knowledge Graph panel (returned for established companies)
       const kg = json.knowledge_graph
-      if (kg) {
+      // Guard: only trust the KG if its title actually references our company name.
+      // SerpAPI can return a KG for a different company with a similar name (e.g. "Clockwork"
+      // the IT firm vs "Clockwork.io" the startup). Strip TLD for matching.
+      const companyCoreName = companyName.replace(/\.[a-z]{2,}$/i, '').toLowerCase()
+      const kgTitle = (kg?.title ?? kg?.name ?? '').toLowerCase()
+      const kgIsValid = !kg || companyCoreName.split(/\s+/).some(
+        (word: string) => word.length > 2 && kgTitle.includes(word)
+      )
+      if (kg && kgIsValid) {
         result.description    = kg.description ?? result.description
         result.hq_location    = kg.headquarters ?? kg.location ?? result.hq_location
         result.website        = kg.website ?? result.website
@@ -216,20 +224,28 @@ async function fetchCompanyIntelligence(
 
   // ── 1b. Wikipedia REST API — description supplement ──────────────────────
   if (!result.description) {
-    try {
-      const slug = encodeURIComponent(companyName.replace(/\s+/g, '_'))
-      const res  = await fetch(
-        `https://en.wikipedia.org/api/rest_v1/page/summary/${slug}`,
-        { headers: { 'User-Agent': 'JobTracker/1.0 (research tool)' } }
-      )
-      if (res.ok) {
-        const wiki = await res.json()
-        if (wiki.extract && wiki.type !== 'disambiguation') {
-          result.description = wiki.extract.split('\n')[0]
+    // Try multiple slugs: exact name, then name without TLD (e.g. "Clockwork.io" → "Clockwork")
+    const wikiSlugs = [
+      companyName.replace(/\s+/g, '_'),
+      companyName.replace(/\.[a-z]{2,}$/i, '').replace(/\s+/g, '_'),
+    ].filter((s, i, arr) => arr.indexOf(s) === i) // deduplicate
+
+    for (const slug of wikiSlugs) {
+      try {
+        const res = await fetch(
+          `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(slug)}`,
+          { headers: { 'User-Agent': 'JobTracker/1.0 (research tool)' } }
+        )
+        if (res.ok) {
+          const wiki = await res.json()
+          if (wiki.extract && wiki.type !== 'disambiguation') {
+            result.description = wiki.extract.split('\n')[0]
+            break
+          }
         }
+      } catch (e) {
+        console.error(`fetchCompanyIntelligence:wiki(${slug})`, e)
       }
-    } catch (e) {
-      console.error('fetchCompanyIntelligence:wiki', e)
     }
   }
 
