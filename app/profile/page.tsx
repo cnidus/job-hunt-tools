@@ -2,6 +2,7 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@supabase/supabase-js'
+import Link from 'next/link'
 import ProfileSetup from '@/components/ProfileSetup'
 
 const supabaseAdmin = createClient(
@@ -37,7 +38,7 @@ export default async function ProfilePage() {
     <div className="min-h-screen bg-[#f4f6fb]">
       <div className="max-w-3xl mx-auto px-4 py-10">
         <div className="mb-8">
-          <a href="/" className="text-sm text-blue-600 hover:underline">← Back to jobs</a>
+          <Link href="/" className="text-sm text-blue-600 hover:underline">← Back to jobs</Link>
           <h1 className="text-2xl font-bold text-gray-900 mt-2">Your Profile</h1>
           <p className="text-gray-500 mt-1">
             Connect your LinkedIn or upload your resume. This is used globally across all jobs
