@@ -75,7 +75,7 @@ export default function ProfileSetup({ initialProfile }: Props) {
           placeholder="https://www.linkedin.com/in/your-handle"
           className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
         />
-        
+        <a
           href="https://www.linkedin.com/help/linkedin/answer/a541960"
           target="_blank"
           rel="noopener noreferrer"
