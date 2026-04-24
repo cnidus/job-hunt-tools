@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 
 interface ResearchJob {
   id: string
@@ -240,7 +241,7 @@ export default function AdminConsole({ initialJobs, userMap }: Props) {
             </p>
           </div>
           <div className="flex gap-2">
-            <a href="/" className="text-sm text-gray-600 px-3 py-1.5 rounded border border-gray-300 bg-white hover:bg-gray-50">← App</a>
+            <Link href="/" className="text-sm text-gray-600 px-3 py-1.5 rounded border border-gray-300 bg-white hover:bg-gray-50">← App</Link>
             <button onClick={refresh} className="text-sm bg-white border border-gray-300 text-gray-700 px-3 py-1.5 rounded hover:bg-gray-50 font-medium">Refresh</button>
           </div>
         </div>

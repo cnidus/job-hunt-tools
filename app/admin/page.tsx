@@ -51,7 +51,7 @@ export default async function AdminPage() {
 
   const userIds = [
     ...new Set(
-      (rawJobs ?? []).map((j: any) => j.jobs?.user_id).filter(Boolean)
+      (rawJobs ?? []).map((j: { jobs?: { user_id?: string } | null }) => j.jobs?.user_id).filter(Boolean)
     ),
   ] as string[]
 
@@ -63,5 +63,5 @@ export default async function AdminPage() {
     })
   )
 
-  return <AdminConsole initialJobs={(rawJobs ?? []) as any[]} userMap={userMap} />
+  return <AdminConsole initialJobs={(rawJobs ?? []) as Parameters<typeof AdminConsole>[0]["initialJobs"]} userMap={userMap} />
 }
