@@ -3,7 +3,7 @@
  * Gated to douglasyoud@gmail.com.
  */
 
-import { NextResponse, type NextRequest } from 'next/server'
+import { NextResponse } from 'next/server'
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
@@ -16,7 +16,7 @@ const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
 )
 
-export async function GET(_request: NextRequest) {
+export async function GET() {
   const cookieStore = await cookies()
   const userSupabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

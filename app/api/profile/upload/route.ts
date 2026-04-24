@@ -83,9 +83,9 @@ Return an empty array [] for any section with no data. Never return null for arr
         role: 'user',
         content: [
           {
-            type: 'document',
-            source: { type: 'base64', media_type: 'application/pdf', data: base64 },
-          } as Anthropic.DocumentBlockParam,
+            type: 'document' as const,
+            source: { type: 'base64' as const, media_type: 'application/pdf' as const, data: base64 },
+          },
           { type: 'text', text: 'Parse this resume/CV into the JSON schema described.' },
         ],
       },
