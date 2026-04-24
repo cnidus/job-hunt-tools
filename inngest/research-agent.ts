@@ -207,6 +207,19 @@ export async function fetchCompanyIntelligence(
   {
     const NAME = '[A-Z][a-z]+(?:\\s[A-Z][a-z]+)+'
 
+    // Strict person-name validator — filters out regex false positives
+    const STOPWORDS = new Set(['and','of','the','said','by','is','was','in','at','for',
+                               'from','with','to','a','an','as','or','on','its','their'])
+    const isValidName = (name: string): boolean => {
+      const parts = name.trim().split(/\s+/)
+      if (parts.length < 2 || parts.length > 3) return false
+      // Every token must look like a proper noun: Capital + ≥1 lowercase letters
+      if (!parts.every((p) => /^[A-Z][a-z]{1,}$/.test(p))) return false
+      // No stopwords
+      if (parts.some((p) => STOPWORDS.has(p.toLowerCase()))) return false
+      return true
+    }
+
     // Dedup-aware entity adder
     const addEntity = (
       name: string,
@@ -215,8 +228,8 @@ export async function fetchCompanyIntelligence(
       src: string
     ) => {
       const n = name.trim()
-      if (!n || n.split(' ').length < 2) return                        // need first + last
-      if (n.toLowerCase().includes(companyCore.split(' ')[0])) return  // don't add company name
+      if (!isValidName(n)) return                                        // must look like a real name
+      if (n.toLowerCase().includes(companyCore.split(' ')[0])) return   // don't add company name
       if (result.entities.find((e) => e.name.toLowerCase() === n.toLowerCase())) return
       result.entities.push({ name: n, role, title: titleStr, linkedin_url: null, source: src })
       if ((role === 'ceo') && !result.ceo_name) result.ceo_name = n
