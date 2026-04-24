@@ -17,11 +17,18 @@ import * as dotenv from 'dotenv'
 import * as path from 'path'
 import * as fs from 'fs'
 
-// Load .env.local when running locally
+// Load .env.local BEFORE any other imports that touch env vars.
+// We use a dynamic import below so the module isn't hoisted above this call.
 const envPath = path.resolve(process.cwd(), '.env.local')
-if (fs.existsSync(envPath)) dotenv.config({ path: envPath })
+if (fs.existsSync(envPath)) {
+  dotenv.config({ path: envPath })
+  console.log('Loaded env from .env.local')
+} else {
+  console.log('No .env.local found — using process environment')
+}
 
-import { fetchCompanyIntelligence } from '../inngest/research-agent'
+// Dynamic import ensures research-agent module-level code runs AFTER dotenv
+const { fetchCompanyIntelligence } = await import('../inngest/research-agent')
 
 // ── Ground truth (source: Crunchbase, verified Apr 2026) ─────────────────────
 const COMPANY = 'Clockwork Systems Inc'
