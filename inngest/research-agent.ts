@@ -103,6 +103,13 @@ async function fetchCompanyIntelligence(
   const serpKey = process.env.SERP_API_KEY
   if (!serpKey) return result
 
+
+  // Hoisted helpers — used across multiple try blocks below
+  const strip = (s: string) =>
+    s.replace(/\.[a-z]{2,}$/i, '')           // remove TLD (.io, .ai, .com)
+     .replace(/\b(inc|corp|llc|ltd|co\.?)\b/gi, '')
+     .replace(/\s+/g, ' ').trim().toLowerCase()
+  const companyCore = strip(companyName)
   // ── 1a. SerpAPI Google search — Knowledge Graph + Related Questions ──────
   try {
     const url = `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent('"' + companyName + '" company')}&api_key=${serpKey}`
@@ -115,11 +122,6 @@ async function fetchCompanyIntelligence(
       // This prevents e.g. "Clockwork" KG (an IT firm) from poisoning "Clockwork Systems Inc" results,
       // because "clockwork" does NOT contain "clockwork systems".
       const kg = json.knowledge_graph
-      const strip = (s: string) =>
-        s.replace(/\.[a-z]{2,}$/i, '')           // remove TLD (.io, .ai, .com)
-         .replace(/\b(inc|corp|llc|ltd|co\.?)\b/gi, '')
-         .replace(/\s+/g, ' ').trim().toLowerCase()
-      const companyCore = strip(companyName)
       const kgCore      = strip(kg?.title ?? kg?.name ?? '')
       // KG is valid only if its core title contains our full company core name
       const kgIsValid = kgCore.includes(companyCore)
