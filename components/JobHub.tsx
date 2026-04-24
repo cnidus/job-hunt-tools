@@ -12,6 +12,7 @@ import ResearchNotes from '@/components/ResearchNotes'
 import ResearchJobStatus from '@/components/ResearchJobStatus'
 import CompanyProfile from '@/components/CompanyProfile'
 import ResearchPapers from '@/components/ResearchPapers'
+import ReadinessTab from '@/components/ReadinessTab'
 
 import {
   fetchJob,
@@ -85,7 +86,7 @@ const DAILY_TEMPLATES: Omit<DailyTask, 'id' | 'task_date' | 'completed_at' | 'no
   ],
 ]
 
-type Tab = 'feed' | 'tasks' | 'mastery' | 'notes' | 'company' | 'research'
+type Tab = 'feed' | 'tasks' | 'mastery' | 'notes' | 'company' | 'research' | 'readiness'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'feed',     label: '📰 Intel Feed' },
@@ -93,7 +94,8 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'mastery',  label: '🎓 Mastery' },
   { id: 'notes',    label: '📝 Notes' },
   { id: 'company',  label: '🏢 Company' },
-  { id: 'research', label: '🔬 Research' },
+  { id: 'research',  label: '🔬 Research' },
+  { id: 'readiness', label: '🎯 Readiness' },
 ]
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -409,6 +411,12 @@ export default function JobHub({ jobId }: Props) {
                 />
                 <ResearchPapers papers={papers} patents={patents} />
               </div>
+            )}
+            {tab === 'readiness' && (
+              <ReadinessTab
+                gapAnalysis={researchJob?.gap_analysis ?? null}
+                phasesComplete={researchJob?.phases_complete ?? []}
+              />
             )}
           </div>
         )}

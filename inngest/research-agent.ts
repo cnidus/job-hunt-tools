@@ -789,6 +789,31 @@ export const researchAgent = inngest.createFunction(
       await markPhaseComplete(researchJobId, 'p5_synthesis')
     })
 
+
+    // ── Phase 6: Gap analysis (user profile vs job) ─────────────────────────
+    await step.run('p6-gap-analysis', async () => {
+      const { data: jobRow } = await supabaseAdmin
+        .from('jobs')
+        .select('user_id, notes')
+        .eq('id', jobId)
+        .single()
+
+      if (jobRow?.user_id) {
+        const { data: cp } = await supabaseAdmin
+          .from('company_profiles')
+          .select('description')
+          .eq('job_id', jobId)
+          .maybeSingle()
+
+        await runGapAnalysis(
+          researchJobId,
+          { ...job, notes: jobRow.notes },
+          jobRow.user_id,
+          cp?.description ?? null
+        )
+      }
+      await markPhaseComplete(researchJobId, 'p6_gap_analysis')
+    })
     // Mark complete
     await supabaseAdmin
       .from('research_jobs')
@@ -801,3 +826,99 @@ export const researchAgent = inngest.createFunction(
     return { ok: true, jobId, researchJobId }
   }
 )
+
+// ─── P6: Gap analysis — user profile vs job requirements ─────────────────────
+
+async function runGapAnalysis(
+  researchJobId: string,
+  job: { company_name: string; role_title: string; notes?: string | null },
+  userId: string,
+  companyDescription: string | null
+): Promise<void> {
+  // Load user profile
+  const { data: userProfile } = await supabaseAdmin
+    .from('user_profiles')
+    .select('resume_text, parsed_profile')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (!userProfile?.resume_text) {
+    // No profile yet — skip silently, gap_analysis stays null
+    console.log('runGapAnalysis: no user profile found, skipping')
+    return
+  }
+
+  const jdContext = [
+    `Role: ${job.role_title} at ${job.company_name}`,
+    companyDescription ? `Company: ${companyDescription}` : null,
+    job.notes ? `Job description / notes:\n${job.notes}` : null,
+  ].filter(Boolean).join('\n\n')
+
+  const prompt = `You are a career coach and technical interviewer. Analyse the candidate's profile against the job and produce a gap analysis JSON.
+
+=== JOB ===
+${jdContext}
+
+=== CANDIDATE PROFILE ===
+${userProfile.resume_text}
+
+=== INSTRUCTIONS ===
+Return ONLY valid JSON (no markdown, no explanation) matching this exact schema:
+{
+  "match_score": <integer 0-100 — overall fit>,
+  "skill_radar": [
+    { "skill": <string>, "user_level": <0-5>, "required_level": <0-5> }
+  ],
+  "study_topics": [
+    {
+      "topic": <string>,
+      "priority": <"high"|"medium"|"low">,
+      "reason": <one sentence why this matters for the role>,
+      "resources": [<up to 3 suggested resource titles / search queries>]
+    }
+  ],
+  "strengths": [
+    { "area": <string>, "detail": <one-two sentences how this gives the candidate an edge> }
+  ],
+  "talking_points": [
+    {
+      "requirement": <key job requirement>,
+      "talking_point": <how the candidate addresses it>,
+      "evidence": <specific past role / project / patent / paper to cite>
+    }
+  ],
+  "generated_at": "${new Date().toISOString()}"
+}
+
+Rules:
+- skill_radar: list the 8-12 most relevant skills for this role. Score user_level 0=none, 5=expert.
+- study_topics: rank by gap size × role importance. Include only topics worth the candidate's time.
+- strengths: highlight patents, niche experience, or domain expertise that distinguishes the candidate.
+- talking_points: map each major JD requirement to the candidate's best evidence. Be specific.
+- If the candidate profile lacks detail for a section, make a conservative estimate and flag it.`
+
+  const response = await anthropic.messages.create({
+    model:      'claude-opus-4-6',
+    max_tokens: 4096,
+    messages:   [{ role: 'user', content: prompt }],
+  })
+
+  const rawText = response.content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+
+  let gapAnalysis: Record<string, unknown>
+  try {
+    const cleaned = rawText.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim()
+    gapAnalysis = JSON.parse(cleaned)
+  } catch {
+    console.error('runGapAnalysis: Claude returned non-JSON', rawText.slice(0, 300))
+    return
+  }
+
+  await supabaseAdmin
+    .from('research_jobs')
+    .update({ gap_analysis: gapAnalysis, updated_at: new Date().toISOString() })
+    .eq('id', researchJobId)
+}

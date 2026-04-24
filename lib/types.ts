@@ -197,6 +197,7 @@ export interface ResearchJob {
   trigger:          ResearchTrigger
   phases_complete:  string[]
   error_message:    string | null
+  gap_analysis:     Record<string, unknown> | null
   created_at:       string
   updated_at:       string
 }

@@ -99,6 +99,15 @@ export default function Header({ job, unreadCount = 0, onRefresh, refreshing }: 
               </div>
             )}
 
+            {/* Profile link */}
+            <Link
+              href="/profile"
+              className="text-xs px-3 py-1.5 rounded-full border border-white/30 bg-white/10 hover:bg-white/20 transition-colors"
+              title="Your profile & gap analysis"
+            >
+              👤 Profile
+            </Link>
+
             {/* Refresh (job mode only) */}
             {job && onRefresh && (
               <button
