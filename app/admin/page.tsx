@@ -17,7 +17,21 @@ const supabaseAdmin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
 )
 
+/** Mirror of ResearchJob in AdminConsole (not exported from that file) */
+interface ResearchJob {
+  id: string
+  job_id: string
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  trigger: string | null
+  phases_complete: string[]
+  error_message: string | null
+  created_at: string
+  updated_at: string
+  jobs: { company_name: string; role_title: string; user_id: string } | null
+}
+
 export default async function AdminPage() {
+  // ── Auth check ──────────────────────────────────────────────────────────────
   const cookieStore = await cookies()
   const userSupabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -39,6 +53,7 @@ export default async function AdminPage() {
     redirect('/')
   }
 
+  // ── Fetch all research jobs ─────────────────────────────────────────────────
   const { data: rawJobs } = await supabaseAdmin
     .from('research_jobs')
     .select(`
@@ -49,10 +64,13 @@ export default async function AdminPage() {
     .order('created_at', { ascending: false })
     .limit(200)
 
+  // Supabase infers joined relations as arrays in its generated types;
+  // cast through unknown so we work with our known shape.
+  const jobs = (rawJobs ?? []) as unknown as ResearchJob[]
+
+  // ── Resolve user emails ─────────────────────────────────────────────────────
   const userIds = [
-    ...new Set(
-      (rawJobs ?? []).map((j: { jobs?: { user_id?: string } | null }) => j.jobs?.user_id).filter(Boolean)
-    ),
+    ...new Set(jobs.map((j) => j.jobs?.user_id).filter(Boolean)),
   ] as string[]
 
   const userMap: Record<string, string> = {}
@@ -63,5 +81,5 @@ export default async function AdminPage() {
     })
   )
 
-  return <AdminConsole initialJobs={(rawJobs ?? []) as Parameters<typeof AdminConsole>[0]["initialJobs"]} userMap={userMap} />
+  return <AdminConsole initialJobs={jobs} userMap={userMap} />
 }
