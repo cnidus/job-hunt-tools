@@ -1,0 +1,44 @@
+name: DQ Canary
+
+on:
+  # Run automatically after Vercel deploys (triggered by push to main)
+  push:
+    branches: [main]
+  # Also allow manual runs from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  canary:
+    name: Company Intelligence DQ Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Wait for Vercel deployment (30s)
+        if: github.event_name == 'push'
+        run: sleep 30
+
+      - name: Run DQ canary
+        env:
+          SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
+          # Optional — dramatically improves people coverage
+          CRUNCHBASE_API_KEY: ${{ secrets.CRUNCHBASE_API_KEY }}
+        run: npm run canary
+
+      - name: Annotate on failure
+        if: failure()
+        run: |
+          echo "::warning::DQ canary failed — company people data may be incomplete."
+          echo "::warning::Check the canary output above for which people are missing."
+          echo "::warning::Consider adding CRUNCHBASE_API_KEY to GitHub secrets for better coverage."

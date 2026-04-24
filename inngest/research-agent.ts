@@ -90,7 +90,7 @@ export function detectMaterialEvent(title: string, summary: string | null): bool
 
 // ─── P1: Multi-source company intelligence ────────────────────────────────────
 
-async function fetchCompanyIntelligence(
+export async function fetchCompanyIntelligence(
   companyName: string
 ): Promise<CompanyIntelligenceResult> {
   const result: CompanyIntelligenceResult = {

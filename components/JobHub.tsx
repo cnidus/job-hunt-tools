@@ -398,6 +398,8 @@ export default function JobHub({ jobId }: Props) {
                   profile={companyProfile}
                   entities={entities}
                   investors={investors}
+                  jobId={jobId}
+                  onEntitiesChange={setEntities}
                 />
               </div>
             )}

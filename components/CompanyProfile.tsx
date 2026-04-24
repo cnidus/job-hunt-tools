@@ -1,11 +1,14 @@
 'use client'
 
+import { useState } from 'react'
 import type { CompanyProfile, CompanyEntity, CompanyInvestor } from '@/lib/types'
 
 interface Props {
-  profile:   CompanyProfile | null
-  entities:  CompanyEntity[]
-  investors: CompanyInvestor[]
+  profile:         CompanyProfile | null
+  entities:        CompanyEntity[]
+  investors:       CompanyInvestor[]
+  jobId?:          string
+  onEntitiesChange?: (entities: CompanyEntity[]) => void
 }
 
 function formatUSD(millions: number | null): string {
@@ -26,7 +29,97 @@ const ROLE_BADGES: Record<string, string> = {
   investor: 'bg-green-100 text-green-700',
 }
 
-export default function CompanyProfile({ profile, entities, investors }: Props) {
+const ALL_ROLES = ['ceo', 'cto', 'founder', 'vp', 'advisor', 'board', 'investor']
+
+interface EditState {
+  name:         string
+  role:         string
+  title:        string
+  linkedin_url: string
+}
+
+export default function CompanyProfile({ profile, entities, investors, jobId, onEntitiesChange }: Props) {
+  const [editingId, setEditingId]   = useState<string | null>(null)
+  const [editForm,  setEditForm]    = useState<EditState>({ name: '', role: 'ceo', title: '', linkedin_url: '' })
+  const [adding,    setAdding]      = useState(false)
+  const [addForm,   setAddForm]     = useState<EditState>({ name: '', role: 'ceo', title: '', linkedin_url: '' })
+  const [saving,    setSaving]      = useState(false)
+
+  const canEdit = !!jobId && !!onEntitiesChange
+
+  const sortedEntities = [...entities].sort((a, b) =>
+    (ROLE_ORDER.indexOf(a.role) ?? 99) - (ROLE_ORDER.indexOf(b.role) ?? 99)
+  )
+
+  // ── Edit existing entity ───────────────────────────────────────────────────
+  function startEdit(entity: CompanyEntity) {
+    setEditingId(entity.id)
+    setEditForm({
+      name:         entity.name,
+      role:         entity.role,
+      title:        entity.title ?? '',
+      linkedin_url: entity.linkedin_url ?? '',
+    })
+  }
+
+  async function saveEdit(id: string) {
+    setSaving(true)
+    try {
+      const res = await fetch('/api/research/entities', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, ...editForm, title: editForm.title || null, linkedin_url: editForm.linkedin_url || null }),
+      })
+      const json = await res.json()
+      if (json.ok && onEntitiesChange) {
+        onEntitiesChange(entities.map((e) => (e.id === id ? json.entity : e)))
+      }
+    } finally {
+      setSaving(false)
+      setEditingId(null)
+    }
+  }
+
+  async function deleteEntity(id: string) {
+    if (!confirm('Remove this person?')) return
+    const res = await fetch('/api/research/entities', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    const json = await res.json()
+    if (json.ok && onEntitiesChange) {
+      onEntitiesChange(entities.filter((e) => e.id !== id))
+    }
+  }
+
+  // ── Add new entity ─────────────────────────────────────────────────────────
+  async function saveAdd() {
+    if (!addForm.name.trim()) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/research/entities', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          job_id:       jobId,
+          name:         addForm.name.trim(),
+          role:         addForm.role,
+          title:        addForm.title || null,
+          linkedin_url: addForm.linkedin_url || null,
+        }),
+      })
+      const json = await res.json()
+      if (json.ok && onEntitiesChange) {
+        onEntitiesChange([...entities, json.entity])
+      }
+    } finally {
+      setSaving(false)
+      setAdding(false)
+      setAddForm({ name: '', role: 'ceo', title: '', linkedin_url: '' })
+    }
+  }
+
   if (!profile) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 p-6 text-center text-gray-400 text-sm">
@@ -34,10 +127,6 @@ export default function CompanyProfile({ profile, entities, investors }: Props) 
       </div>
     )
   }
-
-  const sortedEntities = [...entities].sort((a, b) => {
-    return (ROLE_ORDER.indexOf(a.role) ?? 99) - (ROLE_ORDER.indexOf(b.role) ?? 99)
-  })
 
   return (
     <div className="space-y-4">
@@ -91,7 +180,6 @@ export default function CompanyProfile({ profile, entities, investors }: Props) 
               </span>
             )}
           </div>
-
           {investors.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
               {investors.map((inv) => (
@@ -105,12 +193,74 @@ export default function CompanyProfile({ profile, entities, investors }: Props) 
       )}
 
       {/* Key people */}
-      {sortedEntities.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Key People</p>
-          <div className="space-y-3">
-            {sortedEntities.map((entity) => (
-              <div key={entity.id} className="flex items-center gap-3">
+      <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Key People</p>
+          {canEdit && !adding && (
+            <button
+              onClick={() => setAdding(true)}
+              className="text-xs text-[#3d74cc] hover:underline"
+            >
+              + Add person
+            </button>
+          )}
+        </div>
+
+        {sortedEntities.length === 0 && !adding && (
+          <p className="text-sm text-gray-400">No people found. Add one manually.</p>
+        )}
+
+        <div className="space-y-3">
+          {sortedEntities.map((entity) =>
+            editingId === entity.id ? (
+              // ── Edit row ───────────────────────────────────────────────────
+              <div key={entity.id} className="border border-blue-200 rounded-lg p-3 space-y-2 bg-blue-50">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    className="col-span-2 rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    placeholder="Full name"
+                    value={editForm.name}
+                    onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                  />
+                  <select
+                    className="rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    value={editForm.role}
+                    onChange={(e) => setEditForm((f) => ({ ...f, role: e.target.value }))}
+                  >
+                    {ALL_ROLES.map((r) => <option key={r} value={r}>{r.toUpperCase()}</option>)}
+                  </select>
+                  <input
+                    className="rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    placeholder="Title (optional)"
+                    value={editForm.title}
+                    onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))}
+                  />
+                  <input
+                    className="col-span-2 rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    placeholder="LinkedIn URL (optional)"
+                    value={editForm.linkedin_url}
+                    onChange={(e) => setEditForm((f) => ({ ...f, linkedin_url: e.target.value }))}
+                  />
+                </div>
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => setEditingId(null)}
+                    className="text-xs px-3 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    disabled={saving}
+                    onClick={() => saveEdit(entity.id)}
+                    className="text-xs px-3 py-1 rounded bg-[#3d74cc] text-white hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {saving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              // ── Display row ────────────────────────────────────────────────
+              <div key={entity.id} className="flex items-center gap-3 group">
                 <div className="w-8 h-8 rounded-full bg-[#e8effc] flex items-center justify-center text-xs font-bold text-[#3d74cc] shrink-0">
                   {entity.name.split(' ').map((n) => n[0]).slice(0, 2).join('')}
                 </div>
@@ -120,6 +270,11 @@ export default function CompanyProfile({ profile, entities, investors }: Props) 
                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium uppercase ${ROLE_BADGES[entity.role] ?? 'bg-gray-100 text-gray-600'}`}>
                       {entity.role}
                     </span>
+                    {entity.source === 'manual' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400 font-medium">
+                        edited
+                      </span>
+                    )}
                   </div>
                   {entity.title && (
                     <p className="text-xs text-gray-500 truncate">{entity.title}</p>
@@ -136,11 +291,78 @@ export default function CompanyProfile({ profile, entities, investors }: Props) 
                     in
                   </a>
                 )}
+                {canEdit && (
+                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    <button
+                      onClick={() => startEdit(entity)}
+                      className="text-xs text-gray-400 hover:text-blue-600 px-1"
+                      title="Edit"
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      onClick={() => deleteEntity(entity.id)}
+                      className="text-xs text-gray-400 hover:text-red-500 px-1"
+                      title="Delete"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
+            )
+          )}
+
+          {/* Add new person row */}
+          {adding && (
+            <div className="border border-green-200 rounded-lg p-3 space-y-2 bg-green-50">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  className="col-span-2 rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                  placeholder="Full name *"
+                  value={addForm.name}
+                  onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+                  autoFocus
+                />
+                <select
+                  className="rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                  value={addForm.role}
+                  onChange={(e) => setAddForm((f) => ({ ...f, role: e.target.value }))}
+                >
+                  {ALL_ROLES.map((r) => <option key={r} value={r}>{r.toUpperCase()}</option>)}
+                </select>
+                <input
+                  className="rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                  placeholder="Title (optional)"
+                  value={addForm.title}
+                  onChange={(e) => setAddForm((f) => ({ ...f, title: e.target.value }))}
+                />
+                <input
+                  className="col-span-2 rounded border border-gray-300 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-green-400"
+                  placeholder="LinkedIn URL (optional)"
+                  value={addForm.linkedin_url}
+                  onChange={(e) => setAddForm((f) => ({ ...f, linkedin_url: e.target.value }))}
+                />
+              </div>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => { setAdding(false); setAddForm({ name: '', role: 'ceo', title: '', linkedin_url: '' }) }}
+                  className="text-xs px-3 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  disabled={saving || !addForm.name.trim()}
+                  onClick={saveAdd}
+                  className="text-xs px-3 py-1 rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                >
+                  {saving ? 'Adding…' : 'Add'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   )
 }
