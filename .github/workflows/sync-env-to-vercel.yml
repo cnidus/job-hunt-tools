@@ -1,13 +1,27 @@
 name: Sync Secrets → Vercel Env Vars
 
 on:
-  # Run manually from the Actions tab whenever you rotate a secret
   workflow_dispatch:
-  # Also run whenever this workflow file itself changes (i.e. new var added)
   push:
     branches: [main]
     paths:
       - '.github/workflows/sync-env-to-vercel.yml'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ABOUT THIS WORKFLOW
+# GitHub Secrets is the single source of truth for env vars.
+# This workflow pushes them to Vercel whenever run manually (workflow_dispatch)
+# or when this file changes on main.
+#
+# SENSITIVE VARS (PROXYCURL_API_KEY, SUPABASE_ACCESS_TOKEN):
+#   These are marked Sensitive in Vercel and can't be read back via API, so
+#   they are managed directly in the Vercel dashboard and NOT synced here.
+#
+# INNGEST KEYS:
+#   Inngest uses different keys for production vs preview. They are set in
+#   Vercel manually and intentionally excluded from this sync to avoid
+#   overwriting the preview values with the production ones.
+# ─────────────────────────────────────────────────────────────────────────────
 
 jobs:
   sync:
@@ -17,72 +31,44 @@ jobs:
     steps:
       - name: Sync env vars via Vercel API
         env:
-          VERCEL_TOKEN:                      ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_PROJECT_ID:                 prj_D3doDIBzznOcvSScbllxtP9W5ap5
-          VERCEL_TEAM_ID:                    team_wYMi2YeKNO6AkFTezIgp2YVC
-          # ── secrets to sync ────────────────────────────────────────────────
-          ANTHROPIC_API_KEY:                 ${{ secrets.ANTHROPIC_API_KEY }}
-          SERP_API_KEY:                      ${{ secrets.SERP_API_KEY }}
-          NUBELA_API_KEY:                    ${{ secrets.NUBELA_API_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY:         ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          NEXT_PUBLIC_SUPABASE_URL:          ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          VERCEL_TOKEN:                         ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID:                    prj_D3doDIBzznOcvSScbllxtP9W5ap5
+          VERCEL_TEAM_ID:                       team_wYMi2YeKNO6AkFTezIgp2YVC
+          ANTHROPIC_API_KEY:                    ${{ secrets.ANTHROPIC_API_KEY }}
+          SERP_API_KEY:                         ${{ secrets.SERP_API_KEY }}
+          NUBELA_API_KEY:                       ${{ secrets.NUBELA_API_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY:            ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL:             ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
-          INNGEST_SIGNING_KEY:               ${{ secrets.INNGEST_SIGNING_KEY }}
-          INNGEST_EVENT_KEY:                 ${{ secrets.INNGEST_EVENT_KEY }}
-          PROXYCURL_API_KEY:                 ${{ secrets.PROXYCURL_API_KEY }}
-          SUPABASE_ACCESS_TOKEN:             ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
           set -e
           BASE="https://api.vercel.com/v10/projects/${VERCEL_PROJECT_ID}/env?teamId=${VERCEL_TEAM_ID}&upsert=true"
 
-          # Helper: upsert a single env var for given targets
           upsert() {
-            local key="$1"
-            local value="$2"
-            local targets="$3"   # JSON array string e.g. '["production","preview","development"]'
-
-            if [ -z "$value" ]; then
-              echo "  SKIP  $key (empty — secret not set in GitHub)"
-              return
-            fi
-
-            payload=$(jq -n \
-              --arg k "$key" \
-              --arg v "$value" \
-              --argjson t "$targets" \
+            local key="$1" value="$2" targets="$3"
+            if [ -z "$value" ]; then echo "  SKIP  $key (secret not set)"; return; fi
+            payload=$(jq -n --arg k "$key" --arg v "$value" --argjson t "$targets" \
               '{"key":$k,"value":$v,"type":"encrypted","target":$t}')
-
-            http_code=$(curl -s -o /tmp/vercel_resp.json -w "%{http_code}" \
-              -X POST "$BASE" \
+            http_code=$(curl -s -o /tmp/vresp.json -w "%{http_code}" -X POST "$BASE" \
               -H "Authorization: Bearer $VERCEL_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "$payload")
-
+              -H "Content-Type: application/json" -d "$payload")
             if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
-              echo "  OK    $key → $targets (HTTP $http_code)"
+              echo "  OK    $key"
             else
-              echo "  ERROR $key (HTTP $http_code): $(cat /tmp/vercel_resp.json)"
+              echo "  ERROR $key (HTTP $http_code): $(cat /tmp/vresp.json)"
             fi
           }
 
-          echo "Syncing env vars to Vercel project ${VERCEL_PROJECT_ID}..."
-          echo ""
-
-          # ── vars for all environments ──────────────────────────────────────
           ALL='["production","preview","development"]'
+
+          echo "Syncing to Vercel project ${VERCEL_PROJECT_ID}..."
           upsert "ANTHROPIC_API_KEY"                    "$ANTHROPIC_API_KEY"                    "$ALL"
           upsert "SERP_API_KEY"                         "$SERP_API_KEY"                         "$ALL"
           upsert "NUBELA_API_KEY"                       "$NUBELA_API_KEY"                       "$ALL"
           upsert "SUPABASE_SERVICE_ROLE_KEY"            "$SUPABASE_SERVICE_ROLE_KEY"            "$ALL"
           upsert "NEXT_PUBLIC_SUPABASE_URL"             "$NEXT_PUBLIC_SUPABASE_URL"             "$ALL"
           upsert "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" "$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" "$ALL"
-          upsert "PROXYCURL_API_KEY"                    "$PROXYCURL_API_KEY"                    "$ALL"
-          upsert "SUPABASE_ACCESS_TOKEN"                "$SUPABASE_ACCESS_TOKEN"                "$ALL"
-
-          # ── Inngest: production key → production only ──────────────────────
-          PROD='["production"]'
-          upsert "INNGEST_SIGNING_KEY" "$INNGEST_SIGNING_KEY" "$PROD"
-          upsert "INNGEST_EVENT_KEY"   "$INNGEST_EVENT_KEY"   "$PROD"
 
           echo ""
-          echo "Done. Check Vercel dashboard to confirm."
+          echo "Done. Skipped: INNGEST_* (prod/preview differ — manage in Vercel dashboard)"
+          echo "       Skipped: PROXYCURL_API_KEY, SUPABASE_ACCESS_TOKEN (Sensitive — manage in Vercel dashboard)"
