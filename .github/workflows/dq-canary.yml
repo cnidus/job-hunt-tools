@@ -1,8 +1,11 @@
 name: DQ Canary
 
 on:
-  # Run automatically after Vercel deploys (triggered by push to main)
+  # Run on pushes to both dev (pre-merge validation) and main (post-deploy check)
   push:
+    branches: [main, dev]
+  # Runs on PRs targeting main so canary must pass before merge
+  pull_request:
     branches: [main]
   # Also allow manual runs from the Actions tab
   workflow_dispatch:
@@ -26,7 +29,8 @@ jobs:
         run: npm ci
 
       - name: Wait for Vercel deployment (30s)
-        if: github.event_name == 'push'
+        # Only wait on main pushes — Vercel deploys main, not dev
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: sleep 30
 
       - name: Run DQ canary
