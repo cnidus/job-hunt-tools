@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "canary": "tsx scripts/dq-canary.ts",
-    "env:pull": "vercel env pull .env.local"
+    "env:pull": "npx vercel env pull .env.local"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
