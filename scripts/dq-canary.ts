@@ -27,8 +27,8 @@ if (fs.existsSync(envPath)) {
   console.log('No .env.local found — using process environment')
 }
 
-// Dynamic import ensures research-agent module-level code runs AFTER dotenv
-const { fetchCompanyIntelligence } = await import('../inngest/research-agent')
+// fetchCompanyIntelligence is dynamically imported inside main() below
+// so that dotenv runs before research-agent's module-level Supabase init.
 
 // ── Ground truth (source: Crunchbase, verified Apr 2026) ─────────────────────
 const COMPANY = 'Clockwork Systems Inc'
@@ -67,6 +67,9 @@ function warn(msg: string) { console.log(`  ${YELLOW}~${RESET} ${msg}`) }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
+  // Dynamic import here (not top-level) so dotenv runs first
+  const { fetchCompanyIntelligence } = await import('../inngest/research-agent')
+
   console.log(`\n${BOLD}DQ Canary — ${COMPANY}${RESET}`)
   console.log('─'.repeat(50))
   console.log('Calling fetchCompanyIntelligence…\n')
