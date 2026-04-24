@@ -28,36 +28,12 @@ interface Props {
 export default function ProfileSetup({ initialProfile }: Props) {
   const [profile, setProfile]         = useState<UserProfile | null>(initialProfile)
   const [linkedinUrl, setLinkedinUrl] = useState(initialProfile?.linkedin_url ?? '')
-  const [scraping, setScraping]       = useState(false)
   const [uploading, setUploading]     = useState(false)
   const [error, setError]             = useState<string | null>(null)
   const [success, setSuccess]         = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const parsed = profile?.parsed_profile
-
-  // ── Proxycurl scrape ──────────────────────────────────────────────────────
-  async function handleScrape() {
-    if (!linkedinUrl.trim()) return
-    setScraping(true)
-    setError(null)
-    setSuccess(null)
-    try {
-      const res  = await fetch('/api/profile/scrape', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ linkedin_url: linkedinUrl.trim() }),
-      })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? 'Scrape failed')
-      setProfile(json.profile)
-      setSuccess('LinkedIn profile imported successfully.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Unknown error')
-    } finally {
-      setScraping(false)
-    }
-  }
 
   // ── PDF upload ────────────────────────────────────────────────────────────
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -84,29 +60,29 @@ export default function ProfileSetup({ initialProfile }: Props) {
 
   return (
     <div className="space-y-6">
-      {/* ── LinkedIn scrape ─────────────────────────────────────────────── */}
+      {/* ── LinkedIn section ────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-        <h2 className="text-base font-semibold text-gray-900 mb-1">Import from LinkedIn</h2>
+        <h2 className="text-base font-semibold text-gray-900 mb-1">LinkedIn Profile</h2>
         <p className="text-sm text-gray-500 mb-4">
-          Paste your LinkedIn profile URL. We&apos;ll fetch your full work history, skills, patents,
-          and certifications via Proxycurl (~$0.01 per lookup).
+          Save your LinkedIn URL here for reference, then export your profile as a PDF
+          and upload it below — LinkedIn&apos;s built-in export captures everything including
+          skills, patents, and certifications.
         </p>
-        <div className="flex gap-2">
-          <input
-            type="url"
-            value={linkedinUrl}
-            onChange={(e) => setLinkedinUrl(e.target.value)}
-            placeholder="https://www.linkedin.com/in/your-handle"
-            className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <button
-            onClick={handleScrape}
-            disabled={scraping || !linkedinUrl.trim()}
-            className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {scraping ? 'Importing…' : 'Import'}
-          </button>
-        </div>
+        <input
+          type="url"
+          value={linkedinUrl}
+          onChange={(e) => setLinkedinUrl(e.target.value)}
+          placeholder="https://www.linkedin.com/in/your-handle"
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-3"
+        />
+        
+          href="https://www.linkedin.com/help/linkedin/answer/a541960"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800"
+        >
+          How to export your LinkedIn profile as PDF →
+        </a>
       </div>
 
       {/* ── PDF / resume upload ─────────────────────────────────────────── */}
