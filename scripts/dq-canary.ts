@@ -80,6 +80,7 @@ async function main() {
   const elapsed = ((Date.now() - start) / 1000).toFixed(1)
 
   console.log(`Completed in ${elapsed}s`)
+  console.log(`Website detected: ${result.website ?? '(none — phases 1d/1e skipped)'}`)
   console.log(`Found ${result.entities.length} entit${result.entities.length === 1 ? 'y' : 'ies'}:\n`)
 
   for (const e of result.entities) {

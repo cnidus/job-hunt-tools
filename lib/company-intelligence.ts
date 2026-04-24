@@ -115,6 +115,25 @@ export async function fetchCompanyIntelligence(
           if (m) { result.employee_count = m[1].replace(/,/g, ''); break }
         }
       }
+
+      // Extract company website from organic results when KG doesn't provide it
+      if (!result.website) {
+        const skipDomains = ['crunchbase','linkedin','bloomberg','wikipedia','techcrunch',
+                             'venturebeat','forbes','google','twitter','youtube','facebook',
+                             'bing','yahoo','glassdoor','pitchbook','zoominfo','apollo']
+        for (const organic of (json.organic_results ?? []).slice(0, 5)) {
+          const link: string = organic.link ?? ''
+          if (!link.startsWith('http')) continue
+          const isThirdParty = skipDomains.some((d) => link.toLowerCase().includes(d))
+          if (!isThirdParty) {
+            try {
+              const u = new URL(link)
+              result.website = `${u.protocol}//${u.hostname}`
+              break
+            } catch { /* skip */ }
+          }
+        }
+      }
     }
   } catch (e) {
     console.error('fetchCompanyIntelligence:serp', e)
