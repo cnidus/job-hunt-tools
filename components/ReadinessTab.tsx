@@ -24,7 +24,7 @@ interface TalkingPoint {
   evidence:      string
 }
 
-interface GapAnalysis {
+export interface GapAnalysis {
   match_score:    number
   skill_radar:    SkillRadarItem[]
   study_topics:   StudyTopic[]

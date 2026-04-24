@@ -12,7 +12,7 @@ import ResearchNotes from '@/components/ResearchNotes'
 import ResearchJobStatus from '@/components/ResearchJobStatus'
 import CompanyProfile from '@/components/CompanyProfile'
 import ResearchPapers from '@/components/ResearchPapers'
-import ReadinessTab from '@/components/ReadinessTab'
+import ReadinessTab, { GapAnalysis } from '@/components/ReadinessTab'
 
 import {
   fetchJob,
@@ -414,7 +414,7 @@ export default function JobHub({ jobId }: Props) {
             )}
             {tab === 'readiness' && (
               <ReadinessTab
-                gapAnalysis={researchJob?.gap_analysis ?? null}
+                gapAnalysis={researchJob?.gap_analysis as unknown as GapAnalysis | null ?? null}
                 phasesComplete={researchJob?.phases_complete ?? []}
               />
             )}
