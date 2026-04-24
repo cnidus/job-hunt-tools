@@ -41,7 +41,8 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/login') ||
     pathname.startsWith('/auth') ||
     pathname.startsWith('/_next') ||
-    pathname.startsWith('/favicon')
+    pathname.startsWith('/favicon') ||
+    pathname.startsWith('/api/inngest') // Inngest sync/webhook — must be publicly reachable
 
   if (!user && !isPublic) {
     const url = request.nextUrl.clone()
