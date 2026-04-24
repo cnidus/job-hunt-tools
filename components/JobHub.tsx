@@ -208,7 +208,7 @@ export default function JobHub({ jobId }: Props) {
     }, 5000)
 
     return () => clearInterval(interval)
-  }, [researchJob?.id, researchJob?.status, jobId, loadResearchData])
+  }, [researchJob, jobId, loadResearchData])
 
   // ── Start / re-run research ───────────────────────────────────────────────────
   const handleStartResearch = useCallback(async () => {
