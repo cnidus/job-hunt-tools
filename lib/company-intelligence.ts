@@ -468,22 +468,26 @@ export async function fetchCompanyIntelligence(
     }
   }
 
-  // ── 1f. LinkedIn people search via SerpAPI ───────────────────────────────
-  // LinkedIn profiles often have "Name - Co-Founder at Company" in the title/snippet.
-  // SerpAPI can search site:linkedin.com/in without triggering LinkedIn's bot blocking.
-  try {
-    const liQ = `site:linkedin.com/in "${companyName}" co-founder OR founder OR CEO OR CTO`
-    const liRes = await fetch(
-      `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(liQ)}&num=8&api_key=${serpKey}`
-    )
-    if (liRes.ok) {
-      const liJson = await liRes.json()
-      for (const item of (liJson.organic_results ?? []).slice(0, 8)) {
-        extractPeopleFromText([item.title, item.snippet].filter(Boolean).join(' · '), 'serp_linkedin')
+  // ── 1f. LinkedIn + Crunchbase people search via SerpAPI ─────────────────
+  // LinkedIn profile titles: "Name - Co-Founder at Company | LinkedIn"
+  // Crunchbase person pages:  "Name - Co-Founder @ Company - Crunchbase"
+  // Both formats are reliably parsed by the profileCard / linkedinCard regexes.
+  for (const [label, q] of [
+    ['serp_linkedin', `site:linkedin.com/in "${companyShort}" co-founder OR founder OR CEO OR CTO`],
+    ['serp_crunchbase', `site:crunchbase.com/person "${companyShort}" co-founder OR founder`],
+  ] as [string, string][]) {
+    try {
+      const res = await fetch(
+        `https://serpapi.com/search.json?engine=google&q=${encodeURIComponent(q)}&num=8&api_key=${serpKey}`
+      )
+      if (!res.ok) continue
+      const json = await res.json()
+      for (const item of (json.organic_results ?? []).slice(0, 8)) {
+        extractPeopleFromText([item.title, item.snippet].filter(Boolean).join(' · '), label)
       }
+    } catch (e) {
+      console.error(`fetchCompanyIntelligence:${label}`, e)
     }
-  } catch (e) {
-    console.error('fetchCompanyIntelligence:serp_linkedin', e)
   }
 
   return result
