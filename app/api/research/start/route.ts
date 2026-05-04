@@ -9,16 +9,14 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { getAdminClient } from '@/lib/supabase-admin'
 import { inngest } from '@/inngest/client'
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL         ?? '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY        ??
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
-)
+export const dynamic = 'force-dynamic'
+
 
 export async function POST(request: NextRequest) {
+  const supabaseAdmin = getAdminClient()
   try {
     const { job_id: jobId } = await request.json()
     if (!jobId) {

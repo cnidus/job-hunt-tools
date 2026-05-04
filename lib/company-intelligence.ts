@@ -240,12 +240,6 @@ export async function fetchCompanyIntelligence(
       if (m[1]) addEntity(m[1], 'founder', 'Co-Founder', src)
     }
   }
-  const htmlToText = (html: string) =>
-    html.replace(/<script[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ').trim()
-
   // ── 1a-ii. Leadership team search (always runs, finds multiple people) ──────
   for (const q of [`"${companyName}" co-founders leadership`, `"${companyName}" CEO founder`]) {
       try {

@@ -6,15 +6,13 @@
  */
 
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { getAdminClient } from '@/lib/supabase-admin'
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL         ?? '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY        ??
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
-)
+export const dynamic = 'force-dynamic'
+
 
 export async function GET(request: NextRequest) {
+  const supabaseAdmin = getAdminClient()
   const jobId = request.nextUrl.searchParams.get('job_id')
   if (!jobId) {
     return NextResponse.json({ ok: false, error: 'job_id required' }, { status: 400 })

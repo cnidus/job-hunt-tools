@@ -10,15 +10,12 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse, type NextRequest } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { getAdminClient, type AdminClient } from '@/lib/supabase-admin'
+
+export const dynamic = 'force-dynamic'
+
 
 // Service-role client — bypasses RLS for intel_items inserts
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL         ?? '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY        ??
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
-)
-
 type RawItem = {
   source: string
   item_type: string
@@ -82,7 +79,11 @@ async function fetchGoogleNewsForJob(
 
 // ─── Dedup + upsert ───────────────────────────────────────────────────────
 
-async function upsertItems(items: RawItem[], jobId: string): Promise<number> {
+async function upsertItems(
+  items: RawItem[],
+  jobId: string,
+  supabaseAdmin: AdminClient,
+): Promise<number> {
   if (!items.length) return 0
 
   const urls = items.map((i) => i.url).filter(Boolean)
@@ -107,6 +108,7 @@ async function upsertItems(items: RawItem[], jobId: string): Promise<number> {
 // ─── Route handler ────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
+  const supabaseAdmin = getAdminClient()
   try {
     const jobId = request.nextUrl.searchParams.get('job_id')
     if (!jobId) {
@@ -147,7 +149,7 @@ export async function GET(request: NextRequest) {
     }
 
     const newsItems = await fetchGoogleNewsForJob(job.company_name, job.role_title)
-    const inserted  = await upsertItems(newsItems, jobId)
+    const inserted  = await upsertItems(newsItems, jobId, supabaseAdmin)
 
     return NextResponse.json({
       ok: true,
