@@ -3,15 +3,12 @@
  * POST /api/profile  — upsert parsed_profile + linkedin_url
  */
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
-import { createClient } from '@supabase/supabase-js'
+import { getAdminClient } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { NextResponse, type NextRequest } from 'next/server'
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL         ?? '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY        ??
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
-)
+export const dynamic = 'force-dynamic'
+
 
 async function getUser() {
   const cookieStore = await cookies()
@@ -32,6 +29,7 @@ async function getUser() {
 }
 
 export async function GET() {
+  const supabaseAdmin = getAdminClient()
   const user = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -48,6 +46,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const supabaseAdmin = getAdminClient()
   const user = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 

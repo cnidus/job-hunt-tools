@@ -7,16 +7,13 @@
  * then upserts into user_profiles.
  */
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
-import { createClient } from '@supabase/supabase-js'
+import { getAdminClient } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { NextResponse, type NextRequest } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL         ?? '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY        ??
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? ''
-)
+export const dynamic = 'force-dynamic'
+
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY ?? '',
@@ -42,6 +39,7 @@ async function getUser() {
 }
 
 export async function POST(req: NextRequest) {
+  const supabaseAdmin = getAdminClient()
   const user = await getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
